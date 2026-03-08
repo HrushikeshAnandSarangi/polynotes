@@ -1,0 +1,3 @@
+[submodule "core/whisper.cpp"]
+	path = core/whisper.cpp
+	url = https://github.com/ggml-org/whisper.cpp

@@ -1,0 +1,16 @@
+[package]
+name = "core"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+name = "core"
+
+[dependencies]
+hound = "3.5.1"
+thiserror = "2.0.18"
+
+[build-dependencies]
+bindgen = "0.72.1"
+cc = "1.2.56"
