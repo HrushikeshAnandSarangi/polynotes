@@ -1,50 +1,92 @@
-import { createSignal } from "solid-js";
-import logo from "./assets/logo.svg";
+import { createMemo, createSignal, onMount, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { HomePage } from "./pages/HomePage";
+import { NotePage } from "./pages/NotePage";
+import { SettingsPage } from "./pages/SettingsPage";
+import {
+  getNotes,
+  createNote,
+  deleteNote,
+  clearAllNotes,
+  appendTranscript,
+} from "./store";
+import { getTheme } from "./theme";
+import type { TranscriptEntry } from "./types";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = createSignal("");
-  const [name, setName] = createSignal("");
+const MODEL_PATH_KEY = "polynotes_model_path";
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name: name() }));
+type Page = { name: "home" } | { name: "note"; id: string } | { name: "settings" };
+
+function App() {
+  const [page, setPage] = createSignal<Page>({ name: "home" });
+
+  // Sync persisted model path to backend immediately on startup,
+  // so recording works even if the user hasn't visited Settings yet.
+  onMount(async () => {
+    const saved = localStorage.getItem(MODEL_PATH_KEY) ?? "";
+    if (saved) {
+      await invoke("set_model_path", { path: saved });
+    }
+  });
+
+  const activeNote = createMemo(() => {
+    const p = page();
+    if (p.name !== "note") return undefined;
+    return getNotes()().find((n) => n.id === p.id);
+  });
+
+  function handleCreate(folderId?: string) {
+    const note = createNote();
+    if (folderId) {
+      import("./store").then(m => m.moveNoteToFolder(note.id, folderId));
+    }
+    setPage({ name: "note", id: note.id });
+  }
+
+  function handleOpen(id: string) {
+    setPage({ name: "note", id });
+  }
+
+  function handleDelete(id: string) {
+    deleteNote(id);
+    const p = page();
+    if (p.name === "note" && (p as { name: "note"; id: string }).id === id) {
+      setPage({ name: "home" });
+    }
+  }
+
+  function handleTranscript(entry: TranscriptEntry) {
+    const p = page();
+    if (p.name === "note") appendTranscript(p.id, entry);
   }
 
   return (
-    <main class="container">
-      <h1>Welcome to Tauri + Solid</h1>
-
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://solidjs.com" target="_blank">
-          <img src={logo} class="logo solid" alt="Solid logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and Solid logos to learn more.</p>
-
-      <form
-        class="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
+    /* data-theme drives all CSS variable overrides */
+    <div data-theme={getTheme()()} style={{ "min-height": "100vh", background: "var(--bg)" }}>
+      <Show when={page().name === "home"}>
+        <HomePage
+          notes={getNotes()}
+          onCreate={handleCreate}
+          onOpen={handleOpen}
+          onDelete={handleDelete}
+          onSettings={() => setPage({ name: "settings" })}
         />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg()}</p>
-    </main>
+      </Show>
+      <Show when={page().name === "note"}>
+        <NotePage
+          note={activeNote}
+          onBack={() => setPage({ name: "home" })}
+          onTranscript={handleTranscript}
+        />
+      </Show>
+      <Show when={page().name === "settings"}>
+        <SettingsPage
+          onBack={() => setPage({ name: "home" })}
+          onClearAll={() => { clearAllNotes(); setPage({ name: "home" }); }}
+        />
+      </Show>
+    </div>
   );
 }
 

@@ -9,5 +9,5 @@ if [ ! -d "whisper.cpp" ]; then
 fi
 
 cd whisper.cpp
-bash models/download-ggml-model.sh base.q5_1
+bash models/download-ggml-model.sh base-q5_1
 

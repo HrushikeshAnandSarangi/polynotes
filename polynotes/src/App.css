@@ -1,116 +1,102 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
+@import "tailwindcss";
 
-.logo.solid:hover {
-  filter: drop-shadow(0 0 2em #2f5d90);
-}
+
+
+/* ─── Theme: Cream (default) ─── */
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
+  --bg:          #FDFBF7;
+  --bg-card:     #FFFFFF;
+  --bg-surface:  #F4EFE6;
+  --bg-surface2: #EAE3D5;
+  --border:      #E2D5C1;
+  --border-soft: #F0EADF;
+  --text:        #4A3B32;
+  --text-muted:  #8B7B6E;
+  --text-subtle: #B3A497;
+  --accent:      #D17A43;
+  --accent-dark: #B56535;
+  --accent-fg:   #FFFFFF;
+  --red:         #E15241;
+  --red-soft:    #FCECEA;
+  --amber:       #E89A3C;
+  --amber-soft:  #FDF3E6;
+  --shadow-sm:   0 2px 8px rgba(74, 59, 50, 0.04);
+  --shadow-md:   0 8px 24px rgba(74, 59, 50, 0.08);
+}
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+/* ─── Theme: Dark ─── */
+[data-theme="dark"] {
+  --bg:          #0F0F11;
+  --bg-card:     #18181B;
+  --bg-surface:  #202024;
+  --bg-surface2: #27272A;
+  --border:      #323236;
+  --border-soft: #27272A;
+  --text:        #FAFAFA;
+  --text-muted:  #A1A1AA;
+  --text-subtle: #71717A;
+  --accent:      #6366F1;
+  --accent-dark: #4F46E5;
+  --accent-fg:   #FFFFFF;
+  --red:         #EF4444;
+  --red-soft:    #301616;
+  --amber:       #F59E0B;
+  --amber-soft:  #2B2011;
+  --shadow-sm:   0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-md:   0 8px 24px rgba(0, 0, 0, 0.6);
+}
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
+/* ─── Theme: Mono ─── */
+[data-theme="mono"] {
+  --bg:          #FAFAFA;
+  --bg-card:     #FFFFFF;
+  --bg-surface:  #F4F4F5;
+  --bg-surface2: #E4E4E7;
+  --border:      #E4E4E7;
+  --border-soft: #F4F4F5;
+  --text:        #18181B;
+  --text-muted:  #71717A;
+  --text-subtle: #A1A1AA;
+  --accent:      #18181B;
+  --accent-dark: #000000;
+  --accent-fg:   #FFFFFF;
+  --red:         #EF4444;
+  --red-soft:    #FEF2F2;
+  --amber:       #F59E0B;
+  --amber-soft:  #FFFBEB;
+  --shadow-sm:   0 2px 8px rgba(0, 0, 0, 0.05);
+  --shadow-md:   0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+/* ─── Global ─── */
+html, body, #root {
+  min-height: 100%;
+  width: 100%;
+  background-color: var(--bg);
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  color: var(--text);
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); }
+
+/* ─── Dialog backdrop ─── */
+dialog::backdrop {
+  background: rgba(0,0,0,0.35);
+  backdrop-filter: blur(4px);
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
+/* ─── Selection ─── */
+::selection {
+  background: var(--accent);
+  color: var(--accent-fg);
 }
 
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
+/* ─── Transitions on interactive elements ─── */
+button { cursor: pointer; transition: all 0.15s ease; }
+textarea { font-family: inherit; }

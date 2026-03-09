@@ -2,4 +2,9 @@
 resolver='2'
 members=["core","polynotes/src-tauri",]
 
-
+[profile.release]
+opt-level="z"
+lto="fat"
+codegen-units=1
+strip=true
+panic="abort"

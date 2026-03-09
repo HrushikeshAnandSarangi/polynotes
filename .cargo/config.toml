@@ -1,0 +1,6 @@
+[env]
+# Resolved at compile time to an absolute path from the workspace root.
+# Mirrors the model path used in core/src/tests.rs.
+# `relative = true` means Cargo resolves it relative to THIS file's directory
+# (the workspace root), producing a clean path with no ".." segments.
+WHISPER_MODEL_PATH = { value = "core/whisper.cpp/models/ggml-base-q5_1.bin", relative = true }
