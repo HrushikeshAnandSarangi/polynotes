@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use polynotes_core::{WhisperContext, TranscribeOptions};
 use webrtc_vad::{Vad, VadMode, SampleRate};
@@ -18,8 +18,8 @@ unsafe impl Sync for StreamWrapper {}
 
 static STREAM_GUARD: Mutex<StreamWrapper> = Mutex::new(StreamWrapper(None));
 
-static SAMPLE_BUFFER: Mutex<Vec<i16>> = Mutex::new(Vec::new());
-static SPEECH_BUFFER: Mutex<Vec<f32>> = Mutex::new(Vec::new());
+static SAMPLE_BUFFER: std::sync::Mutex<Vec<i16>> = std::sync::Mutex::new(Vec::new());
+static SPEECH_BUFFER: std::sync::Mutex<Vec<f32>> = std::sync::Mutex::new(Vec::new());
 
 const GAIN_FACTOR: f32 = 6.0;
 const TARGET_RATE: u32 = 16000;
@@ -44,6 +44,53 @@ fn set_model_path(path: String) {
 #[tauri::command]
 fn get_model_path() -> String {
     MODEL_PATH.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+#[derive(Clone, serde::Serialize)]
+struct DownloadProgress {
+    downloaded: u64,
+    total: u64,
+}
+
+#[tauri::command]
+async fn download_model(app: AppHandle) -> Result<String, String> {
+    let url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
+    
+    // Create the models directory in app_data_dir
+    let app_data = app.path().app_data_dir().map_err(|e: tauri::Error| e.to_string())?;
+    let models_dir = app_data.join("models");
+    tokio::fs::create_dir_all(&models_dir).await.map_err(|e: std::io::Error| e.to_string())?;
+    
+    let dest_path = models_dir.join("ggml-base.bin");
+    
+    // Setup request
+    let client = reqwest::Client::new();
+    let res = client.get(url).send().await.map_err(|e| format!("Failed to connect: {}", e))?;
+    let total_size = res.content_length().unwrap_or(141_000_000); // Base model is ~141MB
+    
+    let mut file = tokio::fs::File::create(&dest_path).await.map_err(|e: std::io::Error| e.to_string())?;
+    let mut downloaded: u64 = 0;
+    let mut stream = res.bytes_stream();
+    
+    use futures_util::StreamExt;
+    
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e: reqwest::Error| format!("Error while downloading: {}", e))?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await.map_err(|e: std::io::Error| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        
+        // Emit progress to frontend
+        let _ = app.emit("download_progress", DownloadProgress {
+            downloaded,
+            total: total_size
+        });
+    }
+    
+    // Automatically set it as the active model
+    let path_str = dest_path.to_string_lossy().to_string();
+    set_model_path(path_str.clone());
+    
+    Ok(path_str)
 }
 
 // ── Transcription commands ─────────────────────────────────────────────────
@@ -72,23 +119,26 @@ async fn start_transcription(app: AppHandle, source: String) -> Result<(), Strin
     };
 
     let sample_rate = config.sample_rate().0;
-    let channels = config.channels() as usize;
+    // Prevent division by zero and chunks(0) panic
+    let channels = (config.channels() as usize).max(1);
 
     let _vad_sample_rate = SampleRate::Rate16kHz; // We will always resample to 16kHz
 
-    let frame_size = (sample_rate as usize * 30) / 1000;
+    let _frame_size = (sample_rate as usize * 30) / 1000;
     let err_fn = |err| eprintln!("stream error: {}", err);
 
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.into(),
             move |data: &[f32], _: &_| {
-                let mut i16_buf = SAMPLE_BUFFER.lock().unwrap();
-                for chunk in data.chunks(channels) {
-                    let mono: f32 = chunk.iter().sum::<f32>() / channels as f32;
-                    let boosted = mono * GAIN_FACTOR;
-                    let sample_i16 = (boosted * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                    i16_buf.push(sample_i16);
+                if let Ok(mut i16_buf) = SAMPLE_BUFFER.lock() {
+                    for chunk in data.chunks(channels) {
+                        let mono: f32 = chunk.iter().sum::<f32>() / channels as f32;
+                        let mut boosted = mono * GAIN_FACTOR;
+                        if boosted.is_nan() { boosted = 0.0; } // Prevent NaN clamp panic
+                        let sample_i16 = (boosted * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                        i16_buf.push(sample_i16);
+                    }
                 }
             },
             err_fn,
@@ -98,12 +148,13 @@ async fn start_transcription(app: AppHandle, source: String) -> Result<(), Strin
         cpal::SampleFormat::I16 => device.build_input_stream(
             &config.into(),
             move |data: &[i16], _: &_| {
-                let mut i16_buf = SAMPLE_BUFFER.lock().unwrap();
-                for chunk in data.chunks(channels) {
-                    let mono_i32: i32 = chunk.iter().map(|&s| s as i32).sum::<i32>() / channels as i32;
-                    let boosted = (mono_i32 as f32 * GAIN_FACTOR) as i32;
-                    let mono_i16 = boosted.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-                    i16_buf.push(mono_i16);
+                if let Ok(mut i16_buf) = SAMPLE_BUFFER.lock() {
+                    for chunk in data.chunks(channels) {
+                        let mono_i32: i32 = chunk.iter().map(|&s| s as i32).sum::<i32>() / channels as i32;
+                        let boosted = (mono_i32 as f32 * GAIN_FACTOR) as i32;
+                        let mono_i16 = boosted.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                        i16_buf.push(mono_i16);
+                    }
                 }
             },
             err_fn,
@@ -184,16 +235,24 @@ async fn start_transcription(app: AppHandle, source: String) -> Result<(), Strin
 
             // Drain and resample as many 30ms frames as possible
             loop {
-                let native_needed = (sample_rate as usize * 30) / 1000;
+                // Prevent underflow by asserting native_needed is at least 1
+                let native_needed = ((sample_rate as usize * 30) / 1000).max(1);
+                
                 let frame_ready = {
-                    let buf = SAMPLE_BUFFER.lock().unwrap();
-                    buf.len() >= native_needed
+                    if let Ok(buf) = SAMPLE_BUFFER.lock() {
+                        buf.len() >= native_needed
+                    } else {
+                        false
+                    }
                 };
                 if !frame_ready { break; }
 
                 let native_samples: Vec<i16> = {
-                    let mut buf = SAMPLE_BUFFER.lock().unwrap();
-                    buf.drain(..native_needed).collect()
+                    if let Ok(mut buf) = SAMPLE_BUFFER.lock() {
+                        buf.drain(..native_needed).collect()
+                    } else {
+                        vec![0; native_needed]
+                    }
                 };
 
                 // Simple Linear Resampler: Native rate -> 16000Hz
@@ -202,8 +261,9 @@ async fn start_transcription(app: AppHandle, source: String) -> Result<(), Strin
                 
                 for i in 0..target_frame_size {
                     let pos = (i as f32 * native_needed as f32) / target_frame_size as f32;
-                    let low = pos.floor() as usize;
-                    let high = (low + 1).min(native_needed - 1);
+                    let mut low = pos.floor() as usize;
+                    if low >= native_needed { low = native_needed.saturating_sub(1); }
+                    let high = (low + 1).min(native_needed.saturating_sub(1));
                     let weight = pos - low as f32;
                     
                     let s_low = native_samples[low] as f32;
@@ -237,14 +297,15 @@ async fn start_transcription(app: AppHandle, source: String) -> Result<(), Strin
                 } else {
                     silence_frames += 1;
                     if silence_frames % 50 == 0 {
-                        println!("[polynotes] VAD filtered frame. RMS={:.6} (speech_buf={} samples)", rms, SPEECH_BUFFER.lock().unwrap().len());
+                        let slen = SPEECH_BUFFER.lock().map(|b| b.len()).unwrap_or(0);
+                        println!("[polynotes] VAD filtered frame. RMS={:.6} (speech_buf={} samples)", rms, slen);
                     }
                 }
             }
 
             if loop_iterations % 66 == 0 {
-                let s1 = SAMPLE_BUFFER.lock().unwrap().len();
-                let s2 = SPEECH_BUFFER.lock().unwrap().len();
+                let s1 = SAMPLE_BUFFER.lock().map(|b| b.len()).unwrap_or(0);
+                let s2 = SPEECH_BUFFER.lock().map(|b| b.len()).unwrap_or(0);
                 println!("[polynotes] diag: native_buf={} speech_buf={} samples_total={}", s1, s2, total_samples_processed);
             }
 
@@ -252,11 +313,14 @@ async fn start_transcription(app: AppHandle, source: String) -> Result<(), Strin
 
             // Decide whether to flush accumulated speech to whisper
             let should_flush = {
-                let sb = SPEECH_BUFFER.lock().unwrap();
-                let has_audio = !sb.is_empty();
-                let long_silence = silence_frames >= SILENCE_FLUSH_THRESHOLD;
-                let too_long = sb.len() >= MAX_SPEECH_SAMPLES;
-                has_audio && (long_silence || too_long)
+                if let Ok(sb) = SPEECH_BUFFER.lock() {
+                    let has_audio = !sb.is_empty();
+                    let long_silence = silence_frames >= SILENCE_FLUSH_THRESHOLD;
+                    let too_long = sb.len() >= MAX_SPEECH_SAMPLES;
+                    has_audio && (long_silence || too_long)
+                } else {
+                    false
+                }
             };
 
             if should_flush {
@@ -264,8 +328,11 @@ async fn start_transcription(app: AppHandle, source: String) -> Result<(), Strin
                 println!("[polynotes] flushing audio to whisper...");
 
                 let audio: Vec<f32> = {
-                    let mut sb = SPEECH_BUFFER.lock().unwrap();
-                    std::mem::take(&mut *sb)
+                    if let Ok(mut sb) = SPEECH_BUFFER.lock() {
+                        std::mem::take(&mut *sb)
+                    } else {
+                        Vec::new()
+                    }
                 };
 
                 let opts = TranscribeOptions::default();
@@ -324,6 +391,7 @@ pub fn run() {
             stop_transcription,
             set_model_path,
             get_model_path,
+            download_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

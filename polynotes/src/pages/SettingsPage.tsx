@@ -1,5 +1,6 @@
 import { createSignal, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { Theme } from "../theme";
 import { getTheme, setTheme } from "../theme";
@@ -38,6 +39,9 @@ export function SettingsPage(props: Props) {
   const [modelPath, setModelPath] = createSignal<string>(
     localStorage.getItem(MODEL_PATH_KEY) ?? ""
   );
+  
+  const [isDownloading, setIsDownloading] = createSignal(false);
+  const [downloadProgress, setDownloadProgress] = createSignal(0);
 
   // On mount: push any locally-persisted path into the backend
   onMount(async () => {
@@ -150,35 +154,118 @@ export function SettingsPage(props: Props) {
             Transcription
           </p>
           <div
-            class="rounded-2xl overflow-hidden border"
+            class="rounded-2xl overflow-hidden border flex flex-col"
             style={{ background: "var(--bg-card)", "border-color": "var(--border-soft)" }}
           >
+            {/* Built-in Model Option */}
+            <button
+              onClick={async () => {
+                setModelPath(""); // empty triggers compile-time default in lib.rs
+                localStorage.setItem(MODEL_PATH_KEY, "");
+                await invoke("set_model_path", { path: "" });
+              }}
+              class="flex flex-col text-left px-4 py-3.5 transition-colors border-b hover:bg-[var(--bg-surface)] relative"
+              style={{ "border-color": "var(--border-soft)" }}
+            >
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Built-in Model (Fast)</span>
+                {(!modelPath() || modelPath() === "") && (
+                  <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
+                )}
+              </div>
+              <span class="text-[12px] mt-1" style={{ color: "var(--text-muted)" }}>Bundle default. Highly quantized for speed, but lower accuracy.</span>
+            </button>
+
+            {/* Download Recommended Option */}
+            <div class="flex flex-col transition-colors border-b relative" style={{ "border-color": "var(--border-soft)" }}>
+              <div class="flex items-center justify-between px-4 py-3.5 gap-3">
+                <div class="flex flex-col text-left flex-1">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Recommended Base Model</span>
+                    {modelPath().includes("ggml-base.bin") && (
+                      <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
+                    )}
+                  </div>
+                  <span class="text-[12px] mt-1 pr-2" style={{ color: "var(--text-muted)" }}>~141MB download. Highest accuracy, Hinglish & Multi-language support.</span>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (isDownloading()) return;
+                    setIsDownloading(true);
+                    setDownloadProgress(0);
+                    
+                    const unsubscribe = await listen<{ downloaded: number; total: number }>("download_progress", (event) => {
+                      const p = Math.round((event.payload.downloaded / event.payload.total) * 100);
+                      setDownloadProgress(p);
+                    });
+
+                    try {
+                      const path = await invoke<string>("download_model");
+                      setModelPath(path);
+                      localStorage.setItem(MODEL_PATH_KEY, path);
+                      // Model path is automatically set in backend by the command
+                    } catch (e) {
+                      alert(`Failed to download model: ${e}`);
+                    } finally {
+                      setIsDownloading(false);
+                      setDownloadProgress(0);
+                      unsubscribe();
+                    }
+                  }}
+                  disabled={isDownloading()}
+                  class="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all disabled:opacity-50 flex items-center gap-1.5"
+                  style={{ background: "var(--bg-surface2)", color: "var(--text)" }}
+                >
+                  {isDownloading() ? (
+                    <>
+                      <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      {downloadProgress()}%
+                    </>
+                  ) : (
+                    <>
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download
+                    </>
+                  )}
+                </button>
+              </div>
+              
+              {/* Progress Bar Fill */}
+              {isDownloading() && (
+                <div class="absolute bottom-0 left-0 h-0.5 bg-[var(--accent)] transition-all duration-200" style={{ width: `${downloadProgress()}%` }} />
+              )}
+            </div>
+
+            {/* Custom File Browser Option */}
             <div class="flex items-center justify-between px-4 py-3.5 gap-3">
               <div class="flex flex-col gap-0.5 min-w-0">
-                <span class="text-sm font-medium" style={{ color: "var(--text)" }}>Whisper Model</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Custom Local Model</span>
+                  {(modelPath() && !modelPath().includes("ggml-base.bin")) && (
+                    <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
+                  )}
+                </div>
                 <span
-                  class="text-[11px] truncate"
-                  style={{ color: modelPath() ? "var(--accent)" : "var(--red)" }}
+                  class="text-[12px] truncate"
+                  style={{ color: "var(--text-muted)" }}
                   title={modelPath() || "No model selected"}
                 >
-                  {displayPath() || "No model selected — tap Browse to configure"}
+                  {displayPath() || "Select any local .bin file"}
                 </span>
               </div>
               <button
                 onClick={browseForModel}
-                class="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
-                style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
+                disabled={isDownloading()}
+                class="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50"
+                style={{ background: "var(--bg-surface2)", color: "var(--text)" }}
               >
                 Browse…
               </button>
-            </div>
-            {/* Helper text */}
-            <div
-              class="px-4 pb-3.5 text-[11px] leading-relaxed"
-              style={{ color: "var(--text-muted)", "border-top": "1px solid var(--border-soft)" }}
-            >
-              Select a GGML <code>.bin</code> model file. Download one via&nbsp;
-              <code>bash core/whisper.cpp/models/download-ggml-model.sh base.q5_1</code>
             </div>
           </div>
         </section>

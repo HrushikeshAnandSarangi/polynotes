@@ -99,6 +99,14 @@ impl WhisperContext {
         params.print_realtime=false;
         params.print_timestamps=false;
         params.no_context=true;
+        
+        // Tuning parameters to prevent hallucinations and radically speed up inference
+        params.no_timestamps=true;
+        params.single_segment=true;
+        params.temperature_inc=0.0;
+        params.entropy_thold=2.8;
+        params.logprob_thold=-1.0;
+        params.no_speech_thold=0.6;
 
         if opts.language != "auto"{
             let lang=CString::new(opts.language.as_str()).unwrap();
