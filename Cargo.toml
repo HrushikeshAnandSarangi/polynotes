@@ -3,7 +3,7 @@ resolver='2'
 members=["core","polynotes/src-tauri",]
 
 [profile.release]
-opt-level="z"
+opt-level = 3
 lto="fat"
 codegen-units=1
 strip=true

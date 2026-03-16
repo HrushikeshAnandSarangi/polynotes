@@ -50,7 +50,10 @@ mod tests {
         let ctx = WhisperContext::new(MODEL_PATH).expect("model failed to load");
         let audio = silent_audio(1.0);
         let results = ctx.transcribe_segments(&audio, TranscribeOptions::default());
-        assert!(results.is_ok(), "transcribe_segments() on silent audio should not error");
+        assert!(
+            results.is_ok(),
+            "transcribe_segments() on silent audio should not error"
+        );
     }
 
     // ── transcribe_segments with sine-wave audio ─────────────────────────────
@@ -71,12 +74,16 @@ mod tests {
         // 3 seconds of a 440 Hz tone — long enough for whisper to process one chunk
         let audio = sine_wave(440.0, 3.0);
         assert_eq!(
-            audio.len(), 48_000,
+            audio.len(),
+            48_000,
             "3 s × 16 000 Hz should produce 48 000 samples"
         );
 
         let result = ctx.transcribe_segments(&audio, TranscribeOptions::default());
-        assert!(result.is_ok(), "transcribe_segments() should not error on a sine tone");
+        assert!(
+            result.is_ok(),
+            "transcribe_segments() should not error on a sine tone"
+        );
 
         let segments = result.unwrap();
 

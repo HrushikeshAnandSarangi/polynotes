@@ -1,4 +1,4 @@
-import { createSignal, onMount } from "solid-js";
+import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -8,6 +8,15 @@ import { getTheme, setTheme } from "../theme";
 interface Props {
   onBack: () => void;
   onClearAll: () => void;
+}
+
+interface ModelInfo {
+  id: string;
+  name: string;
+  size_mb: number;
+  url: string;
+  quantization: string;
+  description: string;
 }
 
 const THEMES: { id: Theme; label: string; desc: string; preview: string[] }[] = [
@@ -32,9 +41,11 @@ const THEMES: { id: Theme; label: string; desc: string; preview: string[] }[] = 
 ];
 
 const MODEL_PATH_KEY = "polynotes_model_path";
+const SELECTED_MODEL_KEY = "polynotes_selected_model";
 
 export function SettingsPage(props: Props) {
   let confirmRef!: HTMLDialogElement;
+  let modelDropdownRef!: HTMLDivElement;
 
   const [modelPath, setModelPath] = createSignal<string>(
     localStorage.getItem(MODEL_PATH_KEY) ?? ""
@@ -42,9 +53,38 @@ export function SettingsPage(props: Props) {
   
   const [isDownloading, setIsDownloading] = createSignal(false);
   const [downloadProgress, setDownloadProgress] = createSignal(0);
+  
+  // Model selection state
+  const [availableModels, setAvailableModels] = createSignal<ModelInfo[]>([]);
+  const [selectedModelId, setSelectedModelId] = createSignal<string>(
+    localStorage.getItem(SELECTED_MODEL_KEY) ?? "base-q5_1"
+  );
+  const [showModelDropdown, setShowModelDropdown] = createSignal(false);
 
-  // On mount: push any locally-persisted path into the backend
+  // Close dropdown when clicking outside
+  const handleClickOutside = (e: MouseEvent) => {
+    if (modelDropdownRef && !modelDropdownRef.contains(e.target as Node)) {
+      setShowModelDropdown(false);
+    }
+  };
+
+  // On mount: load available models and set model path
   onMount(async () => {
+    // Add click outside listener
+    document.addEventListener("click", handleClickOutside);
+    
+    onCleanup(() => {
+      document.removeEventListener("click", handleClickOutside);
+    });
+    
+    // Load available models from backend
+    try {
+      const models = await invoke<ModelInfo[]>("get_available_models");
+      setAvailableModels(models);
+    } catch (e) {
+      console.error("Failed to load models:", e);
+    }
+    
     const saved = localStorage.getItem(MODEL_PATH_KEY) ?? "";
     if (saved) {
       await invoke("set_model_path", { path: saved });
@@ -66,11 +106,56 @@ export function SettingsPage(props: Props) {
     }
   }
 
-  const displayPath = () => {
-    const p = modelPath();
-    if (!p) return "";
-    // Show only the filename for readability
-    return p.replace(/\\/g, "/").split("/").pop() ?? p;
+  async function downloadSelectedModel() {
+    const modelId = selectedModelId();
+    if (isDownloading() || !modelId) return;
+    
+    setIsDownloading(true);
+    setDownloadProgress(0);
+    
+    const unsubscribe = await listen<{ downloaded: number; total: number }>("download_progress", (event) => {
+      const p = Math.round((event.payload.downloaded / event.payload.total) * 100);
+      setDownloadProgress(p);
+    });
+
+    try {
+      const path = await invoke<string>("download_model", { modelId: modelId });
+      setModelPath(path);
+      localStorage.setItem(MODEL_PATH_KEY, path);
+    } catch (e) {
+      alert(`Failed to download model: ${e}`);
+    } finally {
+      setIsDownloading(false);
+      setDownloadProgress(0);
+      unsubscribe();
+    }
+  }
+
+  function selectModel(modelId: string) {
+    setSelectedModelId(modelId);
+    localStorage.setItem(SELECTED_MODEL_KEY, modelId);
+    setShowModelDropdown(false);
+  }
+
+  const isCurrentModel = (modelId: string) => {
+    const path = modelPath();
+    return path.includes(modelId.replace("-q5_1", ""));
+  };
+
+  const getCurrentModelName = () => {
+    const path = modelPath();
+    if (!path) return "Built-in Model";
+    const models = availableModels();
+    for (const m of models) {
+      if (path.includes(m.id) || path.includes(m.url.replace("ggml-", "").replace(".bin", ""))) {
+        return m.name;
+      }
+    }
+    return path.split(/[/\\]/).pop() ?? "Custom";
+  };
+
+  const selectedModel = () => {
+    return availableModels().find(m => m.id === selectedModelId());
   };
 
   return (
@@ -160,85 +245,104 @@ export function SettingsPage(props: Props) {
             {/* Built-in Model Option */}
             <button
               onClick={async () => {
-                setModelPath(""); // empty triggers compile-time default in lib.rs
+                setModelPath("");
                 localStorage.setItem(MODEL_PATH_KEY, "");
                 await invoke("set_model_path", { path: "" });
               }}
-              class="flex flex-col text-left px-4 py-3.5 transition-colors border-b hover:bg-[var(--bg-surface)] relative"
+              class="flex flex-col text-left px-4 py-3.5 transition-colors border-b hover:bg-[var(--bg-surface)]"
               style={{ "border-color": "var(--border-soft)" }}
             >
               <div class="flex items-center gap-2">
-                <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Built-in Model (Fast)</span>
+                <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Built-in Model</span>
                 {(!modelPath() || modelPath() === "") && (
                   <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
                 )}
               </div>
-              <span class="text-[12px] mt-1" style={{ color: "var(--text-muted)" }}>Bundle default. Highly quantized for speed, but lower accuracy.</span>
+              <span class="text-[12px] mt-1" style={{ color: "var(--text-muted)" }}>Fastest, lowest accuracy. Bundled with app.</span>
             </button>
 
-            {/* Download Recommended Option */}
-            <div class="flex flex-col transition-colors border-b relative" style={{ "border-color": "var(--border-soft)" }}>
+            {/* Download Model Section */}
+            <div class="border-b" style={{ "border-color": "var(--border-soft)" }}>
               <div class="flex items-center justify-between px-4 py-3.5 gap-3">
                 <div class="flex flex-col text-left flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Recommended Base Model</span>
-                    {modelPath().includes("ggml-base.bin") && (
+                    <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Download Model</span>
+                    <Show when={modelPath() && modelPath().includes("ggml-")}>
                       <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
-                    )}
+                    </Show>
                   </div>
-                  <span class="text-[12px] mt-1 pr-2" style={{ color: "var(--text-muted)" }}>~141MB download. Highest accuracy, Hinglish & Multi-language support.</span>
+                  <span class="text-[12px] mt-1" style={{ color: "var(--text-muted)" }}>
+                    Current: {getCurrentModelName()}
+                  </span>
                 </div>
-                <button
-                  onClick={async () => {
-                    if (isDownloading()) return;
-                    setIsDownloading(true);
-                    setDownloadProgress(0);
-                    
-                    const unsubscribe = await listen<{ downloaded: number; total: number }>("download_progress", (event) => {
-                      const p = Math.round((event.payload.downloaded / event.payload.total) * 100);
-                      setDownloadProgress(p);
-                    });
-
-                    try {
-                      const path = await invoke<string>("download_model");
-                      setModelPath(path);
-                      localStorage.setItem(MODEL_PATH_KEY, path);
-                      // Model path is automatically set in backend by the command
-                    } catch (e) {
-                      alert(`Failed to download model: ${e}`);
-                    } finally {
-                      setIsDownloading(false);
-                      setDownloadProgress(0);
-                      unsubscribe();
-                    }
-                  }}
-                  disabled={isDownloading()}
-                  class="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all disabled:opacity-50 flex items-center gap-1.5"
-                  style={{ background: "var(--bg-surface2)", color: "var(--text)" }}
-                >
-                  {isDownloading() ? (
-                    <>
-                      <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      {downloadProgress()}%
-                    </>
-                  ) : (
-                    <>
-                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
-                      Download
-                    </>
-                  )}
-                </button>
+                
+                {/* Model Selector Dropdown */}
+                <div class="relative" ref={modelDropdownRef}>
+                  <button
+                    onClick={() => setShowModelDropdown(!showModelDropdown())}
+                    disabled={isDownloading()}
+                    class="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+                    style={{ background: "var(--bg-surface2)", color: "var(--text)" }}
+                  >
+                    <span>{selectedModel()?.name ?? "Select"}</span>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  
+                  {/* Dropdown Menu */}
+                  <Show when={showModelDropdown()}>
+                    <div 
+                      class="absolute right-0 top-full mt-1 w-72 max-h-80 z-50 rounded-xl border overflow-y-auto"
+                      style={{ background: "var(--bg-card)", "border-color": "var(--border-soft)" }}
+                    >
+                      <For each={availableModels()}>
+                        {(model) => (
+                          <button
+                            onClick={() => selectModel(model.id)}
+                            class="w-full flex flex-col text-left px-4 py-3 transition-colors hover:bg-[var(--bg-surface)]"
+                            style={{ 
+                              background: selectedModelId() === model.id ? "var(--bg-surface)" : "transparent"
+                            }}
+                          >
+                            <div class="flex items-center justify-between">
+                              <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>{model.name}</span>
+                              <Show when={isCurrentModel(model.id)}>
+                                <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
+                              </Show>
+                            </div>
+                            <span class="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>{model.size_mb} MB • {model.description}</span>
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                </div>
               </div>
               
-              {/* Progress Bar Fill */}
-              {isDownloading() && (
-                <div class="absolute bottom-0 left-0 h-0.5 bg-[var(--accent)] transition-all duration-200" style={{ width: `${downloadProgress()}%` }} />
-              )}
+              {/* Download Button and Progress */}
+              <div class="flex items-center gap-3 px-4 pb-4">
+                <button
+                  onClick={downloadSelectedModel}
+                  disabled={isDownloading() || isCurrentModel(selectedModelId())}
+                  class="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+                  style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
+                >
+                  <Show when={isDownloading()} fallback={
+                    <Show when={!isCurrentModel(selectedModelId())} fallback="Using">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download ({selectedModel()?.size_mb} MB)
+                    </Show>
+                  }>
+                    <svg class="w-4 h-4 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Downloading {downloadProgress()}%
+                  </Show>
+                </button>
+              </div>
             </div>
 
             {/* Custom File Browser Option */}
@@ -246,17 +350,13 @@ export function SettingsPage(props: Props) {
               <div class="flex flex-col gap-0.5 min-w-0">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Custom Local Model</span>
-                  {(modelPath() && !modelPath().includes("ggml-base.bin")) && (
+                  {modelPath() && !modelPath().includes("ggml-") && (
                     <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
                   )}
                 </div>
-                <span
-                  class="text-[12px] truncate"
-                  style={{ color: "var(--text-muted)" }}
-                  title={modelPath() || "No model selected"}
-                >
-                  {displayPath() || "Select any local .bin file"}
-                </span>
+                {modelPath() && !modelPath().includes("ggml-") && (
+                  <span class="text-[12px] truncate" style={{ color: "var(--text-muted)" }}>{modelPath()}</span>
+                )}
               </div>
               <button
                 onClick={browseForModel}
