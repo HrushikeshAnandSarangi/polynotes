@@ -44,7 +44,7 @@ fn main() {
             .flag_if_supported("-fPIC")
             .define("_GNU_SOURCE", None);
     } else {
-        c_build.flag("/O3");
+        c_build.flag("/O2");
     }
     c_build.compile("ggml_c");
 
@@ -80,7 +80,7 @@ fn main() {
         .define("GGML_COMMIT", "\"unknown\"")
         .define("GGML_USE_CPU", None); // enable the CPU backend
     if is_msvc {
-        cpp_build.flag("/std:c++17").flag("/EHsc").flag("/O3");
+        cpp_build.flag("/std:c++17").flag("/EHsc").flag("/O2");
         if is_x86_64 {
             cpp_build.flag("/arch:AVX2");
         }
@@ -110,7 +110,7 @@ fn main() {
         .define("WHISPER_VERSION", "\"0.0.0\"")
         .define("WHISPER_COMMIT", "\"unknown\"");
     if is_msvc {
-        whisper_build.flag("/std:c++17").flag("/EHsc").flag("/O3");
+        whisper_build.flag("/std:c++17").flag("/EHsc").flag("/O2");
         if is_x86_64 {
             whisper_build.flag("/arch:AVX2");
         }

@@ -34,14 +34,24 @@ pub struct TranscribeOptions {
     pub n_threads: i32,
     pub translate: bool,
     pub suppress_blank: bool,
+    pub audio_ctx: i32,
+    pub beam_size: i32,
+    pub best_of: i32,
+    pub max_len: i32,
+    pub no_context: bool,
 }
 impl Default for TranscribeOptions {
     fn default() -> Self {
         Self {
-            language: "auto".into(),
+            language: "en".into(),
             n_threads: num_cpus::get_physical() as i32,
             translate: false,
             suppress_blank: true,
+            audio_ctx: 256,
+            beam_size: 1,
+            best_of: 1,
+            max_len: 0,
+            no_context: true,
         }
     }
 }
@@ -96,15 +106,25 @@ impl WhisperContext {
         params.print_progress = false;
         params.print_realtime = false;
         params.print_timestamps = false;
-        params.no_context = false;
 
-        // Speed-optimized parameters
-        params.single_segment = false; // Use internal chunking for speed
-        params.max_len = 1; // One segment per chunk
+        // Speed-optimized: Use chunked processing (faster for real-time)
+        params.single_segment = false;
         params.no_timestamps = true;
-        params.temperature_inc = 0.2; // Allow sampling for diversity
+        params.no_context = opts.no_context;
+
+        // Aggressive speed settings
+        params.audio_ctx = opts.audio_ctx;
+        params.greedy.best_of = opts.best_of;
+        params.beam_search.beam_size = opts.beam_size;
+        params.max_len = opts.max_len;
+
+        // Speed settings
+        params.temperature_inc = 0.2;
         params.logprob_thold = -1.0;
         params.no_speech_thold = 0.6;
+
+        // Language - default to English for speed
+        params.language = std::ptr::null_mut();
 
         if opts.language != "auto" {
             let lang = CString::new(opts.language.as_str()).unwrap();

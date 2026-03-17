@@ -22,7 +22,7 @@ const GAIN_FACTOR: f32 = 6.0;
 const TARGET_RATE: u32 = 16000;
 
 const BATCH_FRAMES: usize = 10;
-const FRAME_SIZE_MS: u32 = 30;
+const FRAME_SIZE_MS: u32 = 10;
 
 static MODEL_PATH: Mutex<String> = Mutex::new(String::new());
 const DEFAULT_MODEL_PATH: &str = env!("WHISPER_MODEL_PATH");
@@ -65,52 +65,36 @@ pub struct ModelInfo {
 fn get_available_models_list() -> Vec<ModelInfo> {
     vec![
         ModelInfo {
-            id: "tiny-q5_1".to_string(),
-            name: "Tiny (Quantized)".to_string(),
-            size_mb: 31,
-            url: "ggml-tiny-q5_1.bin".to_string(),
+            id: "tiny.en-q5_1".to_string(),
+            name: "Tiny English (q5_1)".to_string(),
+            size_mb: 30,
+            url: "ggml-tiny.en-q5_1.bin".to_string(),
             quantization: "q5_1".to_string(),
-            description: "Fastest, lowest accuracy. Good for testing.".to_string(),
+            description: "Fastest. English only.".to_string(),
         },
         ModelInfo {
-            id: "tiny".to_string(),
-            name: "Tiny".to_string(),
-            size_mb: 75,
-            url: "ggml-tiny.bin".to_string(),
-            quantization: "none".to_string(),
-            description: "Fast, lower accuracy. Good for testing.".to_string(),
+            id: "base.en-q5_1".to_string(),
+            name: "Base English (q5_1)".to_string(),
+            size_mb: 76,
+            url: "ggml-base.en-q5_1.bin".to_string(),
+            quantization: "q5_1".to_string(),
+            description: "Balanced. English only.".to_string(),
+        },
+        ModelInfo {
+            id: "tiny-q5_1".to_string(),
+            name: "Tiny (q5_1)".to_string(),
+            size_mb: 32,
+            url: "ggml-tiny-q5_1.bin".to_string(),
+            quantization: "q5_1".to_string(),
+            description: "Fastest. Multilingual.".to_string(),
         },
         ModelInfo {
             id: "base-q5_1".to_string(),
-            name: "Base (Quantized)".to_string(),
-            size_mb: 57,
+            name: "Base (q5_1)".to_string(),
+            size_mb: 60,
             url: "ggml-base-q5_1.bin".to_string(),
             quantization: "q5_1".to_string(),
-            description: "Recommended: Balanced speed and accuracy.".to_string(),
-        },
-        ModelInfo {
-            id: "base".to_string(),
-            name: "Base".to_string(),
-            size_mb: 142,
-            url: "ggml-base.bin".to_string(),
-            quantization: "none".to_string(),
-            description: "Standard base model. Higher accuracy, slower.".to_string(),
-        },
-        ModelInfo {
-            id: "small-q5_1".to_string(),
-            name: "Small (Quantized)".to_string(),
-            size_mb: 181,
-            url: "ggml-small-q5_1.bin".to_string(),
-            quantization: "q5_1".to_string(),
-            description: "Higher accuracy, requires more resources.".to_string(),
-        },
-        ModelInfo {
-            id: "small".to_string(),
-            name: "Small".to_string(),
-            size_mb: 466,
-            url: "ggml-small.bin".to_string(),
-            quantization: "none".to_string(),
-            description: "Highest accuracy, requires good hardware.".to_string(),
+            description: "Balanced. Multilingual.".to_string(),
         },
     ]
 }

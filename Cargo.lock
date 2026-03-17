@@ -2919,6 +2919,7 @@ dependencies = [
  "core",
  "cpal",
  "futures-util",
+ "num_cpus",
  "reqwest 0.12.28",
  "ringbuf",
  "serde",

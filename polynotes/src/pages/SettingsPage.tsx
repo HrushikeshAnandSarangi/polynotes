@@ -139,7 +139,8 @@ export function SettingsPage(props: Props) {
 
   const isCurrentModel = (modelId: string) => {
     const path = modelPath();
-    return path.includes(modelId.replace("-q5_1", ""));
+    const normalizedId = modelId.replace("-q5_1", "").replace("-q5_0", "");
+    return path.includes(normalizedId);
   };
 
   const getCurrentModelName = () => {
@@ -253,12 +254,12 @@ export function SettingsPage(props: Props) {
               style={{ "border-color": "var(--border-soft)" }}
             >
               <div class="flex items-center gap-2">
-                <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Built-in Model</span>
+                <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Built-in Model (Base English)</span>
                 {(!modelPath() || modelPath() === "") && (
                   <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
                 )}
               </div>
-              <span class="text-[12px] mt-1" style={{ color: "var(--text-muted)" }}>Fastest, lowest accuracy. Bundled with app.</span>
+              <span class="text-[12px] mt-1" style={{ color: "var(--text-muted)" }}>76 MB • English only. Optimized for speed. Bundled.</span>
             </button>
 
             {/* Download Model Section */}
@@ -266,7 +267,7 @@ export function SettingsPage(props: Props) {
               <div class="flex items-center justify-between px-4 py-3.5 gap-3">
                 <div class="flex flex-col text-left flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Download Model</span>
+                    <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Download Additional Model</span>
                     <Show when={modelPath() && modelPath().includes("ggml-")}>
                       <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-[var(--accent-fg)]">Active</span>
                     </Show>

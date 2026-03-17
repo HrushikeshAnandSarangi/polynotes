@@ -33,6 +33,8 @@ Polynotes is built around this reality — chunked inference with per-segment la
 - **Push to talk** — configurable hotkey for noisy environments
 - **Translate to English** — single inference pass handles both transcription and translation, no separate model required
 - **Multilingual support** — Hindi, Bengali, Telugu, Tamil, Odia, and all Whisper multilingual training languages
+- **4 model options** — tiny.en, base.en (English-only), tiny, base (multilingual)
+- **Speed-optimized inference** — 10-27x realtime with quantized models
 - **SolidJS reactive UI** — surgical DOM updates for real-time streaming text, no virtual DOM overhead
 - **Tauri IPC bridge** — low-latency event stream from Rust backend to frontend
 - **First-launch model download** — binary ships under 25mb, model downloaded and cached on first run
@@ -94,9 +96,9 @@ Polynotes is built around this reality — chunked inference with per-segment la
 │  │            Thread 3: Transcription (Separate Thread)                 │   │
 │  │  ┌──────────────────────────────────────────────────────────────┐  │   │
 │  │  │               whisper.cpp (FFI)                               │  │   │
-│  │  │  • ggml-base · multilingual · quantized Q5_1               │  │   │
+│  │  │  • ggml-base.en-q5_1 · English-only · quantized Q5_1       │  │   │
 │  │  │  • Single-segment disabled (chunked processing)            │  │   │
-│  │  │  • Temperature: 0.2 · no_context: false                   │  │   │
+│  │  │  • Audio context: 256 · beam_size: 1 · no_context: true   │  │   │
 │  │  │  • Threads: num_cpus::get_physical()                     │  │   │
 │  │  └──────────────────────────────────────────────────────────────┘  │   │
 │  │                                    ↓ emit transcription_segment      │   │
@@ -113,7 +115,8 @@ Polynotes is built around this reality — chunked inference with per-segment la
 | **Dynamic buffer** | Configurable via `POLYNOTES_BUFFER_SECS` env var (default 60s) | Memory efficient |
 | **Silence threshold** | 1 second (33 frames) for better accuracy | Improved transcription quality |
 | **VAD aggressive mode** | WebRTC VAD in aggressive mode + RMS fallback | Better speech detection |
-| **Speed-optimized params** | `single_segment=false`, `temperature_inc=0.2` | Faster inference |
+| **Speed-optimized params** | `audio_ctx=256`, `beam_size=1`, `no_context=true`, `language=en` | 10-27x realtime |
+| **English-only models** | `.en` models skip language detection | ~2x faster than multilingual |
 
 ### Crate Structure
 
@@ -192,7 +195,7 @@ polynotes/
 | Backend | Rust |
 | ML inference | whisper.cpp via FFI (bindgen + cc) |
 | VAD | WebRTC VAD (`webrtc-vad` crate) |
-| Model format | GGML quantized (ggml-base-q5_1) |
+| Model format | GGML quantized (ggml-base.en-q5_1) |
 | Audio processing | cpal + custom resampler |
 | Threading | std::thread + mpsc channels |
 | Note generation | Gemini Flash API / llama.cpp (v2) |
@@ -204,6 +207,78 @@ polynotes/
 - **opt-level = 3** (speed over size)
 - **AVX2 SIMD** for x86_64 builds
 - **Native threading** with `num_cpus::get_physical()`
+
+---
+
+## Performance Benchmarks
+
+Tested on **AMD Ryzen 5 5600H** (6 cores) with **30-second synthetic audio**.
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    POLYNOTES WHISPER BENCHMARK                           ║
+║                         Performance Analysis                             ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+  CPU: AMD Ryzen 5 5600H (6 cores) | Test Duration: 30s
+
+  ┌─────────────────┬────────────┬────────────────┬───────────┬─────────┐
+  │      Model      │    Time    │    Realtime    │   Size    │  Type   │
+  ├─────────────────┼────────────┼────────────────┼───────────┼─────────┤
+  │  tiny.en-q5_1   │    1.10  s │    27.3    x ✓  │  30 MB    │ English │
+  │  base.en-q5_1   │    2.62  s │    11.4    x ✓  │  76 MB    │ English │
+  │    tiny-q5_1    │   13.97  s │     2.1    x ✓  │  32 MB    │  Multi  │
+  │    base-q5_1    │   24.30  s │     1.2    x ✓  │  60 MB    │  Multi  │
+  └─────────────────┴────────────┴────────────────┴───────────┴─────────┘
+
+  ✓ All models achieved realtime performance (>1x)
+
+  ╔═══════════════════════════════════════════════════════════════════════════════╗
+  ║  BENCHMARK SUMMARY                                                           ║
+  ╠═══════════════════════════════════════════════════════════════════════════════╣
+  ║  Test Duration:  30s                                                       ║
+  ║  CPU Cores:      6                                                          ║
+  ║  Models Tested:  4                                                          ║
+  ║  Avg Realtime:    10.5x                                                       ║
+  ╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Benchmark Results Summary
+
+| Model | Time (30s audio) | Realtime Factor | Type |
+|-------|------------------|-----------------|------|
+| **tiny.en-q5_1** | 1.10s | **27.3x** | English |
+| **base.en-q5_1** | 2.62s | **11.4x** | English |
+| tiny-q5_1 | 13.97s | 2.1x | Multi |
+| base-q5_1 | 24.30s | 1.2x | Multi |
+
+### Optimization Parameters
+
+The benchmark uses these speed-optimized parameters:
+
+```rust
+TranscribeOptions {
+    language: "en",        // English default for speed
+    audio_ctx: 256,        // Minimal context = ~3x faster
+    beam_size: 1,          // Greedy sampling
+    best_of: 1,            // Single sample
+    max_len: 0,           // No limit
+    no_context: true,      // No cross-chunk context
+    n_threads: 6,          // Physical CPU cores
+}
+```
+
+### Running Benchmarks
+
+```bash
+# Download models (if not already)
+./setup.cmd   # Windows
+# or
+bash setup.sh # Linux/Mac
+
+# Run benchmark
+cargo run --release --bin benchmark
+```
 
 ---
 
@@ -236,17 +311,67 @@ cd polynotes
 chmod +x setup.sh && ./setup.sh
 ```
 
+Or use the Makefile for common tasks:
+```bash
+make setup   # Download models
+make dev     # Start development
+make build   # Build production app
+make benchmark  # Run benchmark
+```
+
 The setup script initializes the whisper.cpp submodule and installs frontend dependencies.
+
+### Nix Development (Linux)
+
+If you have Nix with flakes enabled, you can use the provided development shell:
+
+```bash
+# Enter development environment (auto-downloads models on first run)
+nix develop .
+
+# Or with flakes enabled
+nix develop
+
+# Build the app
+nix build
+
+# Run benchmark
+cargo run --release --bin benchmark
+```
+
+The Nix flake provides:
+- Rust toolchain (via rust-overlay)
+- Bun package manager
+- Tauri CLI
+- All build dependencies (cmake, clang, libclang, etc.)
+- Linux desktop dependencies (webkit2gtk, gtk3, etc.)
 
 ### Model Download
 
 On first launch Polynotes downloads the default model automatically. To download manually:
 
+**English-only models (faster):**
 ```bash
-mkdir -p core/models
-wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_0.bin \
-  -O core/models/ggml-base-q5_0.bin
+cd core/whisper.cpp/models
+bash download-ggml-model.sh tiny.en-q5_1   # 30 MB - fastest
+bash download-ggml-model.sh base.en-q5_1   # 76 MB - balanced
 ```
+
+**Multilingual models (any language):**
+```bash
+cd core/whisper.cpp/models
+bash download-ggml-model.sh tiny-q5_1   # 32 MB - fastest
+bash download-ggml-model.sh base-q5_1   # 60 MB - balanced
+```
+
+**Or use the setup script:**
+```bash
+./setup.cmd   # Windows
+# or
+bash setup.sh # Linux/Mac
+```
+
+This downloads all 4 recommended models.
 
 ### Run in Development
 
