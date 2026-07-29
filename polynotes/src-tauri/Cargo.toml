@@ -32,7 +32,7 @@ cpal = "0.15"
 ringbuf = "0.4"
 polynotes_core = { path = "../../core", package = "core" }
 webrtc-vad = "0.4.0"
-reqwest = { version = "0.12", features = ["stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["fs", "io-util"] }
 num_cpus = "1.16"
