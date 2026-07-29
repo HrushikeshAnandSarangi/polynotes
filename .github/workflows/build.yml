@@ -98,6 +98,7 @@ jobs:
         working-directory: polynotes
         run: bun tauri build --ci
         env:
+          MACOSX_DEPLOYMENT_TARGET: 11.0
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
