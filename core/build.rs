@@ -171,6 +171,10 @@ fn main() {
     } else if is_android {
         println!("cargo:rustc-link-lib=c++_shared");
         println!("cargo:rustc-link-lib=m");
+    } else if target_os == "macos" {
+        println!("cargo:rustc-link-lib=c++");
+        println!("cargo:rustc-link-lib=m");
+        println!("cargo:rustc-link-lib=pthread");
     } else {
         println!("cargo:rustc-link-lib=stdc++");
         println!("cargo:rustc-link-lib=m");
