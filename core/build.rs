@@ -54,6 +54,9 @@ fn main() {
             .flag_if_supported("-fPIC")
             .define("_GNU_SOURCE", None);
     }
+    if target_os == "macos" {
+        c_build.flag("-mmacosx-version-min=11.0");
+    }
     c_build.compile("ggml_c");
 
     // ── C++ sources ─────────────────────────────────────────────────────────
@@ -107,6 +110,9 @@ fn main() {
                 .flag_if_supported("-mavx2")
                 .flag_if_supported("-mfma");
         }
+    }
+    if target_os == "macos" {
+        cpp_build.flag("-mmacosx-version-min=11.0");
     }
     cpp_build.compile("ggml_cpp");
 
