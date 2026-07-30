@@ -148,6 +148,21 @@ jobs:
           path: polynotes/target/release/benchmark${{ runner.os == 'Windows' && '.exe' || '' }}
           retention-days: 14
 
+  release:
+    if: github.event_name == 'release'
+    needs: [build, build-benchmark]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: polynotes-*
+          merge-multiple: true
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./*
+
   # android:
   #   runs-on: ubuntu-latest
   #   timeout-minutes: 90
