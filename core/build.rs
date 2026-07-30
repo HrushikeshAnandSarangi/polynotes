@@ -175,6 +175,7 @@ fn main() {
         println!("cargo:rustc-link-lib=c++");
         println!("cargo:rustc-link-lib=m");
         println!("cargo:rustc-link-lib=pthread");
+        println!("cargo:rustc-link-arg=-Wl,-no_dead_strip");
     } else {
         println!("cargo:rustc-link-lib=stdc++");
         println!("cargo:rustc-link-lib=m");
