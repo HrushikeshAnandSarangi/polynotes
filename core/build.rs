@@ -100,6 +100,7 @@ fn main() {
             .flag_if_supported("-std=c++17")
             .flag_if_supported("-pthread")
             .flag_if_supported("-fPIC")
+            .flag_if_supported("-fpermissive")
             .define("_GNU_SOURCE", None);
         if is_x86_64 {
             cpp_build
