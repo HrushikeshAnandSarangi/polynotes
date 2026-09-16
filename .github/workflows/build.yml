@@ -236,6 +236,12 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           log-accepted-android-sdk-licenses: false
+          # Action's own default ("tools platform-tools") includes the legacy
+          # standalone "tools" package, which Google removed from the SDK
+          # repository years ago — sdkmanager now fails to find it. We only
+          # need platform-tools here; cmdline-tools comes preinstalled on the
+          # runner and the NDK is installed explicitly in the next step.
+          packages: "platform-tools"
 
       - name: Install Android NDK
         run: |
