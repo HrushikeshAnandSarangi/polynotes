@@ -54,6 +54,61 @@ Polynotes never runs the naive per-chunk mode in the app itself. Instead it:
 
 This is what gets production latency down to **2–4 seconds end-to-end**, and what the batch numbers above actually reflect — not the E2E numbers.
 
+## v1 Feature Overhead
+
+Confusion detection, code-switching, note generation, and export are new in v1. These tables measure **added latency only** — feature off vs feature on, against the same baseline as the tables above. There is no accuracy/quality benchmark here; see the callout at the end of this section for why.
+
+### Confidence extraction (`extract_confidence`)
+
+| Model | Baseline | Feature on | Delta |
+|---|---:|---:|---:|
+| `tiny.en-q5_1` | 1.01s | 0.98s | -3.0% |
+| `base.en-q5_1` | 2.39s | 2.34s | -1.8% |
+| `tiny-q5_1` | 12.17s | 12.05s | -0.9% |
+| `base-q5_1` | 20.13s | 20.16s | +0.2% |
+
+All deltas are within run-to-run noise. Reading `whisper_full_get_token_p` is a CPU-side read of a distribution `whisper_full` already computed — no extra inference pass — so this matches the design expectation. This is why Polynotes enables it by default in the app.
+
+### Language auto-detection (`detect_language`)
+
+| Model | Baseline | Feature on | Delta |
+|---|---:|---:|---:|
+| `tiny-q5_1` | 12.24s | 17.33s | **+41.6%** |
+| `base-q5_1` | 20.09s | 33.70s | **+67.8%** |
+
+`.en` (English-only) models are skipped — language detection isn't meaningful for them. Unlike confidence extraction, this is a **real, substantial cost**: triggering whisper.cpp's internal auto-detect path (a null `language` pointer) is not free, contrary to what reusing the existing code path might suggest — it measurably changes the decode behavior. This is exactly why Polynotes ships this feature **off by default**, as a Settings opt-in, rather than bundling it into the default pipeline the way confidence extraction is.
+
+### Export generation (Markdown / PDF / Anki CSV)
+
+Fixed ~500-word sample note + 10 flashcards, 20 iterations, no network:
+
+| Format | Avg time |
+|---|---:|
+| Markdown | <0.01ms |
+| Anki CSV | <0.01ms |
+| PDF | 298.52ms |
+
+Markdown and CSV are just string/byte formatting. PDF goes through printpdf's HTML layout engine (`PdfDocument::from_html`), which does real work (parsing, layout, font subsetting) — ~300ms is a one-time cost per export, not per keystroke, so it's not user-visible as lag.
+
+### Gemini Flash note-generation latency (manual, network-dependent)
+
+Not reproducible in CI — it needs a live API key and real network access, and will vary with API load, quota, and region. Run it yourself with:
+
+```bash
+GEMINI_API_KEY=your-key cargo run --release --bin benchmark -- --gemini-latency
+```
+
+It round-trips a representative ~60-word transcript and reports wall-clock latency. The `build-benchmark` CI job never sets `GEMINI_API_KEY`, so this mode always skips cleanly (exit 0) in CI.
+
+### Accuracy/quality benchmarking — out of scope
+
+The tables above measure latency only. Two things are deliberately **not** benchmarked here, because doing so honestly would require test data that doesn't exist yet:
+
+- **Language-detection accuracy** — there is no labeled corpus of code-switched lecture audio with ground-truth per-segment language spans to score `detect_language`'s output against.
+- **Note/flashcard quality** — there is no human-graded rubric or reference-notes set to score Gemini's output against (e.g. a ROUGE-style comparison or expert grading).
+
+Fabricating precision/recall or quality scores without that data would be actively misleading. If this is worth adding later, it needs a labeled multilingual lecture corpus (for language detection) and a graded reference set (for note quality) — both are data-collection projects in their own right, not benchmarking-code changes.
+
 ## Running the benchmarks
 
 ```bash
@@ -66,6 +121,12 @@ cargo run --release --bin benchmark
 
 # End-to-end streaming benchmark
 cargo run --release --bin benchmark -- --e2e
+
+# v1 feature overhead
+cargo run --release --bin benchmark -- --confidence-overhead
+cargo run --release --bin benchmark -- --lang-detect-overhead
+cargo run --release --bin benchmark -- --export
+GEMINI_API_KEY=your-key cargo run --release --bin benchmark -- --gemini-latency
 
 # Show all options
 cargo run --release --bin benchmark -- --help

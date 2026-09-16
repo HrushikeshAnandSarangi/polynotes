@@ -6,9 +6,9 @@
 [![Latest release](https://img.shields.io/github/v/release/HrushikeshAnandSarangi/polynotes)](https://github.com/HrushikeshAnandSarangi/polynotes/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Polynotes is a cross-platform desktop application that transcribes lectures in real time using on-device ML inference, handles the multilingual code-switching common in Indian academic speech, and converts raw transcriptions into structured notes using Gemini or a local LLM — entirely offline-capable.
+Polynotes is a cross-platform desktop application that transcribes lectures in real time using on-device ML inference and handles the multilingual code-switching common in Indian academic speech. Transcription itself is fully offline — no Python runtime, no cloud dependency, no audio leaving your machine. Turning that transcript into structured notes and flashcards is optional and uses the Gemini Flash API, so it needs your own API key and network access.
 
-Built with Tauri 2.0, SolidJS, and Rust. whisper.cpp runs via native FFI — no Python runtime, no cloud dependency, no data leaving your machine.
+Built with Tauri 2.0, SolidJS, and Rust. whisper.cpp runs via native FFI.
 
 ---
 
@@ -28,7 +28,7 @@ Polynotes is built around this reality: chunked inference with per-segment langu
 
 ## Features
 
-### Core — available now
+### Transcription
 
 - **Real-time transcription** via whisper.cpp FFI — no Python, no cloud, runs entirely on device
 - **Low latency** — 2-4s end-to-end from speech to transcription display
@@ -40,76 +40,57 @@ Polynotes is built around this reality: chunked inference with per-segment langu
 - **Multilingual support** — Hindi, Bengali, Telugu, Tamil, Odia, and all Whisper multilingual training languages
 - **4 model options** — tiny.en, base.en (English-only), tiny, base (multilingual)
 - **Speed-optimized inference** — 10-27x realtime with quantized models (see [benchmarks.md](benchmarks.md))
+- **Confusion detection** — per-segment average token confidence flags low-certainty lines for review in the transcript view. Cheap (no extra inference pass — see benchmarks.md), on by default, toggleable in Settings. The flagging threshold is a heuristic, not validated against a labeled dataset.
+- **Multilingual code-switching** — optional per-chunk language auto-detection for lectures that switch languages mid-session. Unlike confidence extraction this has a real, measured cost (see benchmarks.md), so it's a Settings opt-in, off by default.
+
+### Notes and export
+
+- **Post-class note generation** — sends the raw transcript to the Gemini Flash API and gets back structured Markdown notes plus flashcards. Requires your own Gemini API key (Settings) and network access; the key is stored locally and never leaves your machine except to call Google's API.
+- **Export pipeline** — Markdown and PDF export of generated notes, plus an Anki-compatible **CSV** export for flashcards (not a native `.apkg` package — Anki's own File → Import dialog accepts plain CSV directly; map the two columns to Front/Back).
+
+### Platform and infrastructure
+
 - **SolidJS reactive UI** — surgical DOM updates for real-time streaming text, no virtual DOM overhead
 - **Tauri IPC bridge** — low-latency event stream from Rust backend to frontend
 - **First-launch model download** — binary ships under 25 MB, model downloaded and cached on first run
-- **Cross-platform** — Windows (MSVC) and Linux built and tested in CI; macOS and Android are on the roadmap (see below)
-
-### v1 — in progress
-
-- **Confusion detection** — whisper confidence scores flag low-certainty segments for review
-- **Multilingual code-switching** — per-segment language detection handles mid-sentence language switches
-- **Post-class note generation** — Gemini Flash API converts raw transcription to structured markdown notes
-- **Export pipeline** — Markdown, PDF, Anki flashcard formats
-
-### v2 — planned
-
-- **Local LLM note generation** — fully offline via llama.cpp FFI (phi-3-mini-q4)
-- **Lecture continuity** — cross-session knowledge graph, contextualizes new lectures against prior material
-- **Emphasis detection** — acoustic signals (pause length, amplitude) weight important content higher
-- **Exam question prediction** — LLM detects emphasis patterns and generates likely exam questions
-- **macOS and Android** — native builds re-enabled in CI once platform-specific linking is stable
+- **Cross-platform** — Windows (MSVC) and Linux built and tested in CI today; macOS and Android are not currently built (disabled pending platform-specific linking work)
+- **Tag-triggered release CI** — every `vX.Y.Z` tag builds, tests, and publishes a GitHub Release automatically
 
 ---
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    UI["SolidJS Frontend<br/>Transcript view - Settings - Notes panel"]
+
+    subgraph BE["Rust Backend (Tauri)"]
+        direction TB
+        T1["Thread 1: Audio Capture<br/>cpal input to i16, gain, sample_buffer"]
+        T2["Thread 2: Processing<br/>resample 48k to 16k, WebRTC VAD plus RMS gate"]
+        T3["Thread 3: Transcription<br/>whisper.cpp FFI<br/>optional confidence extraction<br/>optional per-chunk language detect"]
+        T1 -->|sample_buffer| T2
+        T2 -->|mpsc channel: speech chunk| T3
+    end
+
+    subgraph POST["Post-recording, on demand"]
+        GEN["generate_notes_cmd"]
+        GEMINI["Gemini Flash API"]
+        EXP["Export: Markdown / PDF / Anki CSV"]
+        GEN -->|transcript| GEMINI
+        GEMINI -->|notes + flashcards| GEN
+        GEN --> EXP
+    end
+
+    UI <-->|Tauri IPC: start/stop_transcription| T1
+    T3 -->|emit transcription_segment<br/>text, confidence, language| UI
+    UI -->|invoke generate_notes_cmd| GEN
+    GEN -->|notes + flashcards| UI
+    UI -->|invoke export commands| EXP
+    EXP -->|local file| DISK[("Local disk")]
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         SolidJS Frontend                                    │
-│              Real-time UI · Settings · Transcription Display                │
-└────────────────────────────────┬────────────────────────────────────────────┘
-                                  │ Tauri IPC (events: transcription_segment)
-┌────────────────────────────────▼────────────────────────────────────────────┐
-│                         Rust Backend                                        │
-│                                                                               │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Thread 1: Audio Capture                          │   │
-│  │  ┌─────────────┐    ┌──────────────────────────────────────────┐   │   │
-│  │  │ cpal input  │ →  │ Convert to i16 + apply GAIN_FACTOR        │   │   │
-│  │  │ (mic/system)│    │ Push to sample_buffer (Arc<Mutex>)        │   │   │
-│  │  └─────────────┘    └──────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │ sample_buffer                          │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │               Thread 2: Processing Loop (non-blocking)               │   │
-│  │  ┌──────────────┐    ┌──────────────┐    ┌────────────────────┐    │   │
-│  │  │ Pop batch    │ →  │ Anti-alias   │ →  │ Resample 48k → 16k │    │   │
-│  │  │ (10 frames)  │    │ filter       │    │ Linear interpolate │    │   │
-│  │  └──────────────┘    └──────────────┘    └────────────────────┘    │   │
-│  │                                                                     │   │
-│  │  ┌──────────────────────────────────────────────────────────────┐  │   │
-│  │  │                    VAD + Speech Detection                    │  │   │
-│  │  │  • WebRTC VAD (aggressive mode)                               │  │   │
-│  │  │  • RMS fallback (threshold 0.02)                              │  │   │
-│  │  │  • Silence threshold: 33 frames (1 second)                    │  │   │
-│  │  └──────────────────────────────────────────────────────────────┘  │   │
-│  │                                    │ speech_buffer → channel       │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │ mpsc channel                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │            Thread 3: Transcription (separate thread)                │   │
-│  │  ┌──────────────────────────────────────────────────────────────┐  │   │
-│  │  │               whisper.cpp (FFI)                               │  │   │
-│  │  │  • ggml-base.en-q5_1 · English-only · quantized Q5_1          │  │   │
-│  │  │  • Single-segment disabled (chunked processing)               │  │   │
-│  │  │  • Audio context: 256 · beam_size: 1 · no_context: true       │  │   │
-│  │  │  • Threads: num_cpus::get_physical()                          │  │   │
-│  │  └──────────────────────────────────────────────────────────────┘  │   │
-│  │                                    │ emit transcription_segment    │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────────────────────────┘
-```
+
+The VAD gate (WebRTC VAD aggressive mode + RMS fallback, 33-frame/1s silence threshold) and the confidence/language options on Thread 3 are what the [Key optimizations](#key-optimizations) and [benchmarks.md](benchmarks.md) tables below quantify.
 
 ### Key optimizations
 
@@ -123,6 +104,8 @@ Polynotes is built around this reality: chunked inference with per-segment langu
 | VAD aggressive mode | WebRTC VAD in aggressive mode + RMS fallback | Better speech detection |
 | Speed-optimized params | `audio_ctx=256`, `beam_size=1`, `no_context=true`, `language=en` | 10-27x realtime |
 | English-only models | `.en` models skip language detection | ~2x faster than multilingual |
+| Confidence extraction (opt-in, app default **on**) | Mean token probability per segment | ~0% overhead — see benchmarks.md |
+| Language auto-detect (opt-in, **off** by default) | Per-chunk `whisper_lang_auto_detect` | +40-70% inference time — see benchmarks.md |
 
 ### Crate structure
 
@@ -130,16 +113,21 @@ Polynotes is built around this reality: chunked inference with per-segment langu
 polynotes/
 ├── core/                        # Library crate — whisper FFI
 │   ├── src/
-│   │   ├── lib.rs               # WhisperContext, TranscribeOptions
+│   │   ├── lib.rs               # WhisperContext, TranscribeOptions, Segment
 │   │   ├── bindings.rs          # Generated whisper.cpp FFI bindings
 │   │   └── tests.rs             # Unit tests
 │   ├── build.rs                 # bindgen + cc compilation of whisper.cpp/ggml
 │   └── whisper.cpp/             # whisper.cpp submodule
 ├── polynotes/                   # Tauri app
 │   ├── src/                     # SolidJS frontend
+│   │   └── pages/                # HomePage, NotePage, SettingsPage, NotesPanel
 │   └── src-tauri/
 │       └── src/
-│           ├── lib.rs           # Audio capture, VAD, processing, transcription
+│           ├── lib.rs           # Composition root — command registration only
+│           ├── transcription.rs # Audio capture, VAD, processing, transcription
+│           ├── models.rs        # Whisper model selection/download
+│           ├── gemini.rs        # Gemini Flash note generation
+│           ├── export.rs        # Markdown / PDF / Anki CSV export
 │           ├── main.rs          # App entry point
 │           └── benchmark.rs     # Standalone benchmark binary
 ├── Cargo.toml                   # Workspace root (opt-level = 3, shared target/)
@@ -161,8 +149,9 @@ polynotes/
 | Model format | GGML quantized (`ggml-base.en-q5_1`) |
 | Audio processing | cpal + custom resampler |
 | Threading | `std::thread` + `mpsc` channels |
-| Note generation | Gemini Flash API today, llama.cpp planned for v2 |
-| Storage | SQLite |
+| Note generation | Gemini Flash API (user-supplied key, requires network) |
+| Note export | `printpdf` (HTML-to-PDF) for PDF, `csv` for Anki-compatible CSV |
+| Storage | Browser `localStorage` (notes, folders, settings) |
 | CI/CD | GitHub Actions, tag-triggered releases |
 
 ### Build optimizations
@@ -253,13 +242,17 @@ bun tauri build
 
 Release builds are also produced automatically by CI on every `vX.Y.Z` tag — see [Releases](https://github.com/HrushikeshAnandSarangi/polynotes/releases).
 
+### Note generation (optional)
+
+Post-class note generation and export need a Gemini API key. Get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), then paste it into Settings → AI Notes. The key is stored only in the app's local settings and is sent only to Google's Gemini API when you generate notes — never anywhere else.
+
 ---
 
 ## Benchmarks
 
-On an AMD Ryzen 5 5600H, Polynotes' batch pipeline hits **10-27x realtime** depending on model, and the full VAD-gated production pipeline delivers **2-4s end-to-end latency** from speech to on-screen transcription.
+On an AMD Ryzen 5 5600H, Polynotes' batch pipeline hits **10-27x realtime** depending on model, and the full VAD-gated production pipeline delivers **2-4s end-to-end latency** from speech to on-screen transcription. Confidence extraction (on by default) costs effectively nothing (within run-to-run noise); language auto-detection (off by default) adds a real **+40-70%** to inference time depending on model, which is exactly why it's opt-in.
 
-Full methodology, per-model numbers, and the batch-vs-streaming tradeoff are in [benchmarks.md](benchmarks.md).
+Full methodology, per-model numbers, the batch-vs-streaming tradeoff, export-generation timings, and an explicit note on what's *not* benchmarked (accuracy/quality — no labeled dataset exists) are all in [benchmarks.md](benchmarks.md).
 
 ---
 

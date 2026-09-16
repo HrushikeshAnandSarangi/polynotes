@@ -1,4 +1,5 @@
 use polynotes_core::{TranscribeOptions, WhisperContext};
+use polynotes_lib::{export, gemini};
 use std::env;
 use std::io::Write;
 use std::time::Instant;
@@ -90,6 +91,17 @@ fn find_available_models() -> Vec<ModelInfo> {
 }
 
 fn run_benchmark_for_model(model: &ModelInfo, audio: &[f32]) -> BenchmarkMetrics {
+    run_benchmark_for_model_with_opts(model, audio, TranscribeOptions::default())
+}
+
+/// Same as `run_benchmark_for_model` but with caller-supplied
+/// `TranscribeOptions`, so the confidence/language overhead benchmarks can
+/// reuse it for both the baseline and feature-enabled runs.
+fn run_benchmark_for_model_with_opts(
+    model: &ModelInfo,
+    audio: &[f32],
+    opts: TranscribeOptions,
+) -> BenchmarkMetrics {
     let whisper = match WhisperContext::new(&model.path) {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -102,8 +114,6 @@ fn run_benchmark_for_model(model: &ModelInfo, audio: &[f32]) -> BenchmarkMetrics
             };
         }
     };
-
-    let opts = TranscribeOptions::default();
 
     let start = Instant::now();
     let result = whisper.transcribe_segments(audio, opts);
@@ -555,6 +565,242 @@ fn run_e2e_benchmark(models: &[ModelInfo], audio: &[f32]) {
     print_e2e_summary(&results);
 }
 
+// ── Feature overhead benchmarks ──────────────────────────────────────────
+// Measure the added cost of opt-in features against the same fixed-language,
+// no-extraction baseline documented in benchmarks.md — never accuracy, only
+// latency. See benchmarks.md's "Accuracy/quality benchmarking — out of
+// scope" note for why.
+
+#[derive(Debug)]
+struct OverheadMetrics {
+    model_name: String,
+    baseline_secs: f64,
+    feature_secs: f64,
+}
+
+impl OverheadMetrics {
+    fn delta_ms(&self) -> f64 {
+        (self.feature_secs - self.baseline_secs) * 1000.0
+    }
+
+    fn delta_pct(&self) -> f64 {
+        if self.baseline_secs > 0.0 {
+            ((self.feature_secs - self.baseline_secs) / self.baseline_secs) * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
+fn print_overhead_table(title: &str, results: &[OverheadMetrics]) {
+    println!();
+    println!("  {title}");
+    println!("  ┌─────────────────┬────────────┬────────────┬───────────┬──────────┐");
+    println!(
+        "  │ {:^15} │ {:^10} │ {:^10} │ {:^9} │ {:^8} │",
+        "Model", "Baseline", "Feature On", "Delta", "Delta %"
+    );
+    println!("  ├─────────────────┼────────────┼────────────┼───────────┼──────────┤");
+    for r in results {
+        println!(
+            "  │ {:^15} │ {:^9.2}s │ {:^9.2}s │ {:^+8.0}ms │ {:^+7.1}% │",
+            r.model_name,
+            r.baseline_secs,
+            r.feature_secs,
+            r.delta_ms(),
+            r.delta_pct()
+        );
+    }
+    println!("  └─────────────────┴────────────┴────────────┴───────────┴──────────┘");
+    println!();
+}
+
+fn run_confidence_overhead_benchmark(models: &[ModelInfo], audio: &[f32]) {
+    println!("  Measuring confidence-extraction overhead (baseline vs extract_confidence=true)...");
+
+    let mut results = Vec::new();
+    for model in models {
+        print!("  Testing {}... ", model.name);
+        std::io::stdout().flush().unwrap();
+
+        let baseline = run_benchmark_for_model_with_opts(model, audio, TranscribeOptions::default());
+        let feature = run_benchmark_for_model_with_opts(
+            model,
+            audio,
+            TranscribeOptions {
+                extract_confidence: true,
+                ..TranscribeOptions::default()
+            },
+        );
+        println!(
+            "{:.2}s -> {:.2}s",
+            baseline.inference_time_secs, feature.inference_time_secs
+        );
+
+        results.push(OverheadMetrics {
+            model_name: model.name.clone(),
+            baseline_secs: baseline.inference_time_secs,
+            feature_secs: feature.inference_time_secs,
+        });
+    }
+
+    print_overhead_table("Confidence Extraction Overhead", &results);
+}
+
+fn run_lang_detect_overhead_benchmark(models: &[ModelInfo], audio: &[f32]) {
+    println!("  Measuring language-detection overhead (baseline vs detect_language=true)...");
+    println!("  (English-only .en models are skipped: language detection isn't meaningful for them.)");
+
+    let multilingual: Vec<&ModelInfo> = models.iter().filter(|m| !m.name.contains(".en")).collect();
+    if multilingual.is_empty() {
+        println!("  No multilingual models found — run setup.sh/setup.cmd to download tiny-q5_1 or base-q5_1.");
+        return;
+    }
+
+    let mut results = Vec::new();
+    for model in multilingual {
+        print!("  Testing {}... ", model.name);
+        std::io::stdout().flush().unwrap();
+
+        let baseline = run_benchmark_for_model_with_opts(model, audio, TranscribeOptions::default());
+        let feature = run_benchmark_for_model_with_opts(
+            model,
+            audio,
+            TranscribeOptions {
+                detect_language: true,
+                ..TranscribeOptions::default()
+            },
+        );
+        println!(
+            "{:.2}s -> {:.2}s",
+            baseline.inference_time_secs, feature.inference_time_secs
+        );
+
+        results.push(OverheadMetrics {
+            model_name: model.name.clone(),
+            baseline_secs: baseline.inference_time_secs,
+            feature_secs: feature.inference_time_secs,
+        });
+    }
+
+    print_overhead_table("Language Auto-Detection Overhead", &results);
+}
+
+const SAMPLE_MARKDOWN_NOTES: &str = "\
+# Sample Lecture Notes\n\n\
+## Introduction\n\n\
+This is a representative ~500-word sample note used only to time export \
+generation, not to evaluate note quality.\n\n\
+- Point one about the lecture topic\n\
+- Point two with a **bold** key term\n\
+- Point three referencing a formula or definition\n\n\
+## Details\n\n\
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod \
+tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim \
+veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea \
+commodo consequat. Duis aute irure dolor in reprehenderit in voluptate \
+velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint \
+occaecat cupidatat non proident, sunt in culpa qui officia deserunt \
+mollit anim id est laborum.\n\n\
+## Summary\n\n\
+A closing paragraph summarizing the key takeaways from the session.\n";
+
+fn sample_flashcards() -> Vec<gemini::Flashcard> {
+    (0..10)
+        .map(|i| gemini::Flashcard {
+            question: format!("Sample question {}?", i + 1),
+            answer: format!("Sample answer {} with some, punctuation.", i + 1),
+        })
+        .collect()
+}
+
+fn run_export_benchmark() {
+    const ITERATIONS: u32 = 20;
+    println!("  Timing export generation ({ITERATIONS} iterations, fixed ~500-word sample note + 10 flashcards, no network)...");
+    println!();
+
+    let flashcards = sample_flashcards();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let _ = export::markdown_export("Sample Lecture", SAMPLE_MARKDOWN_NOTES);
+    }
+    let markdown_avg_ms = start.elapsed().as_secs_f64() * 1000.0 / ITERATIONS as f64;
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let _ = export::anki_csv_export(&flashcards);
+    }
+    let csv_avg_ms = start.elapsed().as_secs_f64() * 1000.0 / ITERATIONS as f64;
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let _ = export::pdf_export("Sample Lecture", SAMPLE_MARKDOWN_NOTES);
+    }
+    let pdf_avg_ms = start.elapsed().as_secs_f64() * 1000.0 / ITERATIONS as f64;
+
+    println!("  ┌─────────────────┬────────────┐");
+    println!("  │ {:^15} │ {:^10} │", "Format", "Avg time");
+    println!("  ├─────────────────┼────────────┤");
+    println!("  │ {:^15} │ {:^9.2}ms │", "Markdown", markdown_avg_ms);
+    println!("  │ {:^15} │ {:^9.2}ms │", "Anki CSV", csv_avg_ms);
+    println!("  │ {:^15} │ {:^9.2}ms │", "PDF", pdf_avg_ms);
+    println!("  └─────────────────┴────────────┘");
+    println!();
+}
+
+const SAMPLE_TRANSCRIPT_FOR_GEMINI: &str = "\
+Today we covered the basics of supply and demand. When the price of a good \
+increases, quantity demanded typically falls, all else equal. Producers \
+respond to higher prices by supplying more. Equilibrium is the price at \
+which quantity supplied equals quantity demanded. We also discussed price \
+elasticity and how it varies across goods with more or fewer substitutes.";
+
+fn run_gemini_latency_benchmark() {
+    let api_key = match env::var("GEMINI_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
+            println!("  SKIP: GEMINI_API_KEY not set. This benchmark requires a live Gemini API key");
+            println!("  and network access, so it never runs in CI. To run it locally:");
+            println!("    GEMINI_API_KEY=your-key cargo run --release --bin benchmark -- --gemini-latency");
+            return;
+        }
+    };
+
+    println!("  Calling Gemini Flash with a representative ~60-word transcript...");
+    println!("  (Network-dependent — latency will vary with API load/quota/region; not reproducible in CI.)");
+
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("  Failed to start async runtime: {e}");
+            return;
+        }
+    };
+
+    let start = Instant::now();
+    let result = runtime.block_on(gemini::generate_notes(
+        &api_key,
+        SAMPLE_TRANSCRIPT_FOR_GEMINI,
+        "gemini-2.5-flash",
+    ));
+    let elapsed = start.elapsed();
+
+    match result {
+        Ok(notes) => {
+            println!(
+                "  Round-trip latency: {:.2}s ({} flashcards generated)",
+                elapsed.as_secs_f64(),
+                notes.flashcards.len()
+            );
+        }
+        Err(e) => {
+            eprintln!("  Gemini call failed: {e}");
+        }
+    }
+    println!();
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -566,16 +812,38 @@ fn main() {
         println!("  cargo run --release --bin benchmark [OPTIONS]");
         println!();
         println!("Options:");
-        println!("  --e2e, -e       Run end-to-end latency benchmark (streaming mode)");
-        println!("  --help, -h      Show this help message");
+        println!("  --e2e, -e               Run end-to-end latency benchmark (streaming mode)");
+        println!("  --confidence-overhead   Measure extract_confidence's added latency vs baseline");
+        println!("  --lang-detect-overhead  Measure detect_language's added latency vs baseline");
+        println!("  --export                Time Markdown/PDF/Anki-CSV export generation (no network)");
+        println!("  --gemini-latency        Time a real Gemini Flash call (needs GEMINI_API_KEY, network)");
+        println!("  --help, -h              Show this help message");
         println!();
         println!("Examples:");
-        println!("  cargo run --release --bin benchmark        # Batch benchmark");
-        println!("  cargo run --release --bin benchmark --e2e  # E2E streaming benchmark");
+        println!("  cargo run --release --bin benchmark                       # Batch benchmark");
+        println!("  cargo run --release --bin benchmark --e2e                 # E2E streaming benchmark");
+        println!("  cargo run --release --bin benchmark --confidence-overhead");
+        println!("  cargo run --release --bin benchmark --export");
+        println!("  GEMINI_API_KEY=... cargo run --release --bin benchmark --gemini-latency");
+        return;
+    }
+
+    // Modes that don't need models/audio at all — handle before the shared
+    // model-discovery setup below.
+    if args.iter().any(|arg| arg == "--export") {
+        print_banner("batch");
+        run_export_benchmark();
+        return;
+    }
+    if args.iter().any(|arg| arg == "--gemini-latency") {
+        print_banner("batch");
+        run_gemini_latency_benchmark();
         return;
     }
 
     let is_e2e = args.iter().any(|arg| arg == "--e2e" || arg == "-e");
+    let is_confidence_overhead = args.iter().any(|arg| arg == "--confidence-overhead");
+    let is_lang_detect_overhead = args.iter().any(|arg| arg == "--lang-detect-overhead");
 
     print_banner(if is_e2e { "e2e" } else { "batch" });
 
@@ -611,7 +879,11 @@ fn main() {
     );
     println!();
 
-    if is_e2e {
+    if is_confidence_overhead {
+        run_confidence_overhead_benchmark(&models, &audio);
+    } else if is_lang_detect_overhead {
+        run_lang_detect_overhead_benchmark(&models, &audio);
+    } else if is_e2e {
         run_e2e_benchmark(&models, &audio);
     } else {
         run_batch_benchmark(&models, &audio);
