@@ -39,6 +39,15 @@ pub struct TranscribeOptions {
     pub best_of: i32,
     pub max_len: i32,
     pub no_context: bool,
+    /// Extracts per-segment average token confidence and no-speech probability.
+    /// Cheap (reads state whisper_full already computed); off by default so
+    /// `TranscribeOptions::default()` stays behaviorally identical to before
+    /// this field existed.
+    pub extract_confidence: bool,
+    /// Runs whisper's internal language auto-detection instead of forcing
+    /// `language`. Off by default — see `build_params` for why this is not
+    /// free the way `extract_confidence` is.
+    pub detect_language: bool,
 }
 impl Default for TranscribeOptions {
     fn default() -> Self {
@@ -52,6 +61,8 @@ impl Default for TranscribeOptions {
             best_of: 1,
             max_len: 0,
             no_context: true,
+            extract_confidence: false,
+            detect_language: false,
         }
     }
 }
@@ -62,6 +73,17 @@ pub struct Segment {
     pub start_ms: i64,
     pub end_ms: i64,
     pub text: String,
+    /// Mean of `whisper_full_get_token_p` across the segment's tokens.
+    /// `None` unless `TranscribeOptions::extract_confidence` was set.
+    pub avg_confidence: Option<f32>,
+    /// `whisper_full_get_segment_no_speech_prob` for this segment.
+    /// `None` unless `TranscribeOptions::extract_confidence` was set.
+    pub no_speech_prob: Option<f32>,
+    /// ISO 639-1-ish code from `whisper_lang_str`, detected once per
+    /// `transcribe_segments` call (i.e. per audio chunk) and applied to
+    /// every segment from that call. `None` unless
+    /// `TranscribeOptions::detect_language` was set.
+    pub language: Option<String>,
 }
 
 ///Struct context wrapper for the loaded whisper model.
@@ -126,7 +148,9 @@ impl WhisperContext {
         // Language - default to English for speed
         params.language = std::ptr::null_mut();
 
-        if opts.language != "auto" {
+        // detect_language reuses whisper.cpp's own auto-detect path (triggered by
+        // a null language pointer) and takes precedence over a fixed `language`.
+        if !opts.detect_language && opts.language != "auto" {
             let lang = CString::new(opts.language.as_str()).unwrap();
             params.language = lang.into_raw();
         }
@@ -142,7 +166,7 @@ impl WhisperContext {
         let ret =
             unsafe { bindings::whisper_full(self.ctx, params, audio.as_ptr(), audio.len() as i32) };
 
-        if !params.language.is_null() && opts.language != "auto" {
+        if !params.language.is_null() && !opts.detect_language && opts.language != "auto" {
             unsafe {
                 drop(CString::from_raw(params.language as *mut _));
             }
@@ -150,6 +174,29 @@ impl WhisperContext {
         if ret != 0 {
             return Err(CoreError::InferenceFailed(ret));
         }
+
+        // One detection per chunk (not per segment): whisper_full already ran
+        // auto-detection internally when detect_language forced a null language
+        // pointer, so this is a cheap read of state it already computed.
+        let language = if opts.detect_language {
+            let lang_id = unsafe { bindings::whisper_full_lang_id(self.ctx) };
+            if lang_id >= 0 {
+                let ptr = unsafe { bindings::whisper_lang_str(lang_id) };
+                if ptr.is_null() {
+                    None
+                } else {
+                    Some(
+                        unsafe { CStr::from_ptr(ptr) }
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let n = unsafe { bindings::whisper_full_n_segments(self.ctx) };
 
@@ -170,10 +217,28 @@ impl WhisperContext {
 
             let end_ms = unsafe { bindings::whisper_full_get_segment_t1(self.ctx, i) };
 
+            let (avg_confidence, no_speech_prob) = if opts.extract_confidence {
+                let n_tokens = unsafe { bindings::whisper_full_n_tokens(self.ctx, i) };
+                let nsp = unsafe { bindings::whisper_full_get_segment_no_speech_prob(self.ctx, i) };
+                if n_tokens > 0 {
+                    let sum: f32 = (0..n_tokens)
+                        .map(|j| unsafe { bindings::whisper_full_get_token_p(self.ctx, i, j) })
+                        .sum();
+                    (Some(sum / n_tokens as f32), Some(nsp))
+                } else {
+                    (None, Some(nsp))
+                }
+            } else {
+                (None, None)
+            };
+
             out.push(Segment {
                 start_ms,
                 end_ms,
                 text,
+                avg_confidence,
+                no_speech_prob,
+                language: language.clone(),
             });
         }
         Ok(out)

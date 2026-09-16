@@ -58,7 +58,7 @@ export function createNote(): Note {
   return note;
 }
 
-export function updateNote(id: string, patch: Partial<Pick<Note, "title" | "body">>) {
+export function updateNote(id: string, patch: Partial<Pick<Note, "title" | "body" | "generatedNotes">>) {
   persistNotes(notes().map((n) => n.id === id ? { ...n, ...patch, updatedAt: nowISO() } : n));
 }
 

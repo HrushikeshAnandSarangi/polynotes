@@ -42,6 +42,26 @@ const THEMES: { id: Theme; label: string; desc: string; preview: string[] }[] = 
 
 const MODEL_PATH_KEY = "polynotes_model_path";
 const SELECTED_MODEL_KEY = "polynotes_selected_model";
+export const GEMINI_API_KEY_KEY = "polynotes_gemini_api_key";
+export const DETECT_LANGUAGE_KEY = "polynotes_detect_language";
+export const EXTRACT_CONFIDENCE_KEY = "polynotes_extract_confidence";
+
+function ToggleSwitch(props: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      role="switch"
+      aria-checked={props.checked}
+      onClick={() => props.onChange(!props.checked)}
+      class="relative w-10 h-6 rounded-full transition-colors shrink-0"
+      style={{ background: props.checked ? "var(--accent)" : "var(--bg-surface2)" }}
+    >
+      <span
+        class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform"
+        style={{ transform: props.checked ? "translateX(19px)" : "translateX(3px)" }}
+      />
+    </button>
+  );
+}
 
 export function SettingsPage(props: Props) {
   let confirmRef!: HTMLDialogElement;
@@ -60,6 +80,32 @@ export function SettingsPage(props: Props) {
     localStorage.getItem(SELECTED_MODEL_KEY) ?? "base-q5_1"
   );
   const [showModelDropdown, setShowModelDropdown] = createSignal(false);
+
+  // AI notes settings
+  const [geminiApiKey, setGeminiApiKey] = createSignal<string>(
+    localStorage.getItem(GEMINI_API_KEY_KEY) ?? ""
+  );
+  const [detectLanguage, setDetectLanguage] = createSignal<boolean>(
+    localStorage.getItem(DETECT_LANGUAGE_KEY) === "true"
+  );
+  const [extractConfidence, setExtractConfidence] = createSignal<boolean>(
+    localStorage.getItem(EXTRACT_CONFIDENCE_KEY) !== "false" // default on
+  );
+
+  function saveGeminiApiKey(v: string) {
+    setGeminiApiKey(v);
+    localStorage.setItem(GEMINI_API_KEY_KEY, v);
+  }
+
+  function toggleDetectLanguage(v: boolean) {
+    setDetectLanguage(v);
+    localStorage.setItem(DETECT_LANGUAGE_KEY, String(v));
+  }
+
+  function toggleExtractConfidence(v: boolean) {
+    setExtractConfidence(v);
+    localStorage.setItem(EXTRACT_CONFIDENCE_KEY, String(v));
+  }
 
   // Close dropdown when clicking outside
   const handleClickOutside = (e: MouseEvent) => {
@@ -367,6 +413,55 @@ export function SettingsPage(props: Props) {
               >
                 Browse…
               </button>
+            </div>
+          </div>
+        </section>
+
+        {/* ── AI Notes ── */}
+        <section class="mb-10 w-full">
+          <p class="text-[11px] font-semibold uppercase tracking-widest mb-3" style={{ color: "var(--text-subtle)" }}>
+            AI Notes
+          </p>
+          <div
+            class="rounded-2xl overflow-hidden border flex flex-col"
+            style={{ background: "var(--bg-card)", "border-color": "var(--border-soft)" }}
+          >
+            {/* Gemini API key */}
+            <div class="flex flex-col px-4 py-3.5 border-b gap-2" style={{ "border-color": "var(--border-soft)" }}>
+              <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Gemini API Key</span>
+              <input
+                type="password"
+                value={geminiApiKey()}
+                onInput={(e) => saveGeminiApiKey(e.currentTarget.value)}
+                placeholder="Paste your Gemini API key"
+                class="w-full px-3 py-2 rounded-xl text-sm outline-none"
+                style={{ background: "var(--bg-surface2)", color: "var(--text)" }}
+              />
+              <span class="text-[11px]" style={{ color: "var(--text-subtle)" }}>
+                Stored locally on this device only, and sent solely to Google's Gemini API when you generate notes.
+              </span>
+            </div>
+
+            {/* Auto-detect language toggle */}
+            <div class="flex items-center justify-between px-4 py-3.5 border-b gap-3" style={{ "border-color": "var(--border-soft)" }}>
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Auto-detect language per segment</span>
+                <span class="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                  Handles mid-lecture code-switching. Off by default — costs some speed, see benchmarks.md.
+                </span>
+              </div>
+              <ToggleSwitch checked={detectLanguage()} onChange={toggleDetectLanguage} />
+            </div>
+
+            {/* Flag low-confidence segments toggle */}
+            <div class="flex items-center justify-between px-4 py-3.5 gap-3">
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-sm font-semibold" style={{ color: "var(--text)" }}>Flag low-confidence segments</span>
+                <span class="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                  Marks transcript lines whisper was unsure about, for review. Heuristic threshold, on by default.
+                </span>
+              </div>
+              <ToggleSwitch checked={extractConfidence()} onChange={toggleExtractConfidence} />
             </div>
           </div>
         </section>

@@ -93,4 +93,92 @@ mod tests {
             let _ = seg;
         }
     }
+
+    // ── confidence + language opt-in fields ──────────────────────────────
+
+    #[test]
+    fn test_default_options_leave_new_fields_none() {
+        if !model_available() {
+            eprintln!("SKIP: model not found at {MODEL_PATH}");
+            return;
+        }
+        let ctx = WhisperContext::new(MODEL_PATH).expect("model failed to load");
+        let audio = sine_wave(440.0, 3.0);
+        let segments = ctx
+            .transcribe_segments(&audio, TranscribeOptions::default())
+            .expect("transcribe_segments should not error");
+
+        for seg in &segments {
+            assert!(
+                seg.avg_confidence.is_none(),
+                "avg_confidence must stay None when extract_confidence is off (default)"
+            );
+            assert!(
+                seg.no_speech_prob.is_none(),
+                "no_speech_prob must stay None when extract_confidence is off (default)"
+            );
+            assert!(
+                seg.language.is_none(),
+                "language must stay None when detect_language is off (default)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_confidence_populates_avg_confidence() {
+        if !model_available() {
+            eprintln!("SKIP: model not found at {MODEL_PATH}");
+            return;
+        }
+        let ctx = WhisperContext::new(MODEL_PATH).expect("model failed to load");
+        let audio = sine_wave(440.0, 3.0);
+        let opts = TranscribeOptions {
+            extract_confidence: true,
+            ..TranscribeOptions::default()
+        };
+        let segments = ctx
+            .transcribe_segments(&audio, opts)
+            .expect("transcribe_segments should not error");
+
+        for seg in &segments {
+            if let Some(conf) = seg.avg_confidence {
+                assert!(
+                    (0.0..=1.0).contains(&conf),
+                    "avg_confidence {conf} should be a probability in [0, 1]"
+                );
+            }
+            if let Some(nsp) = seg.no_speech_prob {
+                assert!(
+                    (0.0..=1.0).contains(&nsp),
+                    "no_speech_prob {nsp} should be a probability in [0, 1]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_detect_language_sets_language_field() {
+        if !model_available() {
+            eprintln!("SKIP: model not found at {MODEL_PATH}");
+            return;
+        }
+        // MODEL_PATH (ggml-base-q5_1) is the multilingual model — required for
+        // language auto-detection to be meaningful.
+        let ctx = WhisperContext::new(MODEL_PATH).expect("model failed to load");
+        let audio = sine_wave(440.0, 3.0);
+        let opts = TranscribeOptions {
+            detect_language: true,
+            ..TranscribeOptions::default()
+        };
+        let segments = ctx
+            .transcribe_segments(&audio, opts)
+            .expect("transcribe_segments should not error");
+
+        if let Some(first) = segments.first() {
+            assert!(
+                first.language.is_some(),
+                "language should be populated when detect_language is on"
+            );
+        }
+    }
 }

@@ -100,3 +100,27 @@ dialog::backdrop {
 /* ─── Transitions on interactive elements ─── */
 button { cursor: pointer; transition: all 0.15s ease; }
 textarea { font-family: inherit; }
+
+/* ─── Rendered Gemini markdown (Notes panel) ─── */
+.prose-notes h1, .prose-notes h2, .prose-notes h3 {
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 1.1em;
+  margin-bottom: 0.4em;
+}
+.prose-notes h1:first-child, .prose-notes h2:first-child, .prose-notes h3:first-child { margin-top: 0; }
+.prose-notes h1 { font-size: 1.25rem; }
+.prose-notes h2 { font-size: 1.1rem; }
+.prose-notes h3 { font-size: 1rem; }
+.prose-notes p { margin-bottom: 0.6em; }
+.prose-notes ul, .prose-notes ol { margin: 0.4em 0 0.8em 1.25em; }
+.prose-notes ul { list-style: disc; }
+.prose-notes ol { list-style: decimal; }
+.prose-notes li { margin-bottom: 0.25em; }
+.prose-notes strong { font-weight: 600; }
+.prose-notes code {
+  background: var(--bg-surface2);
+  padding: 0.1em 0.35em;
+  border-radius: 0.3em;
+  font-size: 0.9em;
+}

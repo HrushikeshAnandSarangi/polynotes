@@ -1,9 +1,11 @@
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import type { Accessor } from "solid-js";
-import type { AudioSource, TranscriptEntry, Note } from "../types";
+import type { AudioSource, TranscriptEntry, TranscriptSegmentPayload, Note, GeneratedNotes } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getFolders, moveNoteToFolder } from "../store";
+import { getFolders, moveNoteToFolder, updateNote } from "../store";
+import { NotesPanel } from "./NotesPanel";
+import { DETECT_LANGUAGE_KEY, EXTRACT_CONFIDENCE_KEY } from "./SettingsPage";
 
 interface Props {
   note: Accessor<Note | undefined>;
@@ -31,7 +33,8 @@ export function NotePage(props: Props) {
   const [isStarting, setIsStarting] = createSignal(false);
   const [recordState, setRecordState] = createSignal<RecordState>("idle");
   const [isFolderMenuOpen, setIsFolderMenuOpen] = createSignal(false);
-  
+  const [isNotesPanelOpen, setIsNotesPanelOpen] = createSignal(false);
+
   let unlisten: (() => void)[] = [];
   let transcriptEndRef!: HTMLDivElement;
 
@@ -54,8 +57,16 @@ export function NotePage(props: Props) {
 
     if (unlisten.length === 0) {
       console.log("[polynotes] NotePage: setting up transcription listeners");
-      const u1 = await listen<string>("transcription_segment", (event) => {
-        props.onTranscript({ id: generateId(), timestamp: nowTimestamp(), text: event.payload });
+      const u1 = await listen<TranscriptSegmentPayload>("transcription_segment", (event) => {
+        const p = event.payload;
+        props.onTranscript({
+          id: generateId(),
+          timestamp: nowTimestamp(),
+          text: p.text,
+          confidence: p.confidence,
+          isLowConfidence: p.is_low_confidence,
+          language: p.language,
+        });
         setTimeout(() => transcriptEndRef?.scrollIntoView({ behavior: "smooth" }), 50);
       });
       const u2 = await listen<string>("transcription_error", (event) => {
@@ -65,10 +76,16 @@ export function NotePage(props: Props) {
       });
       unlisten = [u1, u2];
     }
-    
+
     try {
       console.log("[polynotes] NotePage: invoking start_transcription");
-      await invoke("start_transcription", { source: source() });
+      const detectLanguage = localStorage.getItem(DETECT_LANGUAGE_KEY) === "true";
+      const extractConfidence = localStorage.getItem(EXTRACT_CONFIDENCE_KEY) !== "false";
+      await invoke("start_transcription", {
+        source: source(),
+        detectLanguage,
+        extractConfidence,
+      });
     } catch (e) {
       console.error("[polynotes] NotePage: start_transcription failed:", e);
       setRecordState("idle"); 
@@ -227,6 +244,21 @@ export function NotePage(props: Props) {
             </>
           </Show>
         </div>
+
+        {/* Generate Notes entry point */}
+        <Show when={recordState() === "idle" && transcripts().length > 0}>
+          <button
+            onClick={() => setIsNotesPanelOpen(true)}
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0"
+            style={{ background: "var(--accent)", color: "var(--accent-fg)" }}
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Notes
+          </button>
+        </Show>
       </header>
 
       {/* ── Divider ── */}
@@ -262,23 +294,47 @@ export function NotePage(props: Props) {
         >
           <div class="max-w-2xl mx-auto space-y-1 pb-4">
             <For each={transcripts()}>
-              {(entry) => (
-                <div
-                  class="flex gap-4 items-start py-3 px-1 rounded-xl transition-colors"
-                >
-                  {/* Time badge */}
-                  <span
-                    class="shrink-0 text-[11px] font-mono pt-1 tabular-nums mt-1 select-none w-16 text-right opacity-60"
-                    style={{ color: "var(--text-subtle)" }}
+              {(entry, i) => {
+                const prevLanguage = () => (i() > 0 ? transcripts()[i() - 1].language : undefined);
+                const showLanguagePill = () => entry.language && entry.language !== prevLanguage();
+                return (
+                  <div
+                    class="flex gap-4 items-start py-3 px-1 rounded-xl transition-colors"
+                    style={
+                      entry.isLowConfidence
+                        ? { "border-left": "2px solid var(--amber)", "padding-left": "10px", "margin-left": "-12px" }
+                        : undefined
+                    }
                   >
-                    {entry.timestamp}
-                  </span>
-                  {/* Text */}
-                  <p class="flex-1 text-[16px] leading-[1.7]" style={{ color: "var(--text)" }}>
-                    {entry.text}
-                  </p>
-                </div>
-              )}
+                    {/* Time badge */}
+                    <span
+                      class="shrink-0 text-[11px] font-mono pt-1 tabular-nums mt-1 select-none w-16 text-right opacity-60"
+                      style={{ color: "var(--text-subtle)" }}
+                    >
+                      {entry.timestamp}
+                    </span>
+                    {/* Text + badges */}
+                    <div class="flex-1">
+                      <Show when={showLanguagePill()}>
+                        <span
+                          class="inline-block text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full mb-1"
+                          style={{ background: "var(--bg-surface2)", color: "var(--text-muted)" }}
+                        >
+                          {entry.language}
+                        </span>
+                      </Show>
+                      <p class="text-[16px] leading-[1.7]" style={{ color: "var(--text)" }}>
+                        {entry.text}
+                      </p>
+                      <Show when={entry.isLowConfidence}>
+                        <span class="text-[11px]" style={{ color: "var(--amber)" }} title="Low confidence — review">
+                          Low confidence — review
+                        </span>
+                      </Show>
+                    </div>
+                  </div>
+                );
+              }}
             </For>
             {/* Scroll anchor */}
             <div ref={transcriptEndRef!} />
@@ -375,6 +431,16 @@ export function NotePage(props: Props) {
           </div>
         </div>
       </div>
+
+      <Show when={isNotesPanelOpen() && note()}>
+        <NotesPanel
+          title={note()!.title}
+          transcripts={transcripts()}
+          generatedNotes={note()!.generatedNotes}
+          onGenerated={(generated: GeneratedNotes) => updateNote(note()!.id, { generatedNotes: generated })}
+          onClose={() => setIsNotesPanelOpen(false)}
+        />
+      </Show>
     </div>
   );
 }

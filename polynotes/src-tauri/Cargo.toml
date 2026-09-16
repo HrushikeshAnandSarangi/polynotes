@@ -32,7 +32,10 @@ cpal = "0.15"
 ringbuf = "0.4"
 polynotes_core = { path = "../../core", package = "core" }
 webrtc-vad = "0.4.0"
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
 futures-util = "0.3"
-tokio = { version = "1", features = ["fs", "io-util"] }
+tokio = { version = "1", features = ["fs", "io-util", "rt"] }
 num_cpus = "1.16"
+printpdf = { version = "0.12", features = ["html"] }
+pulldown-cmark = "0.12"
+csv = "1"
