@@ -19,6 +19,8 @@ fn main() {
     let is_msvc = target_env == "msvc";
     let is_android = target_os == "android";
     let is_x86_64 = target_arch == "x86_64";
+    // Covers both macOS Apple Silicon runners and aarch64-linux-android.
+    let is_aarch64 = target_arch == "aarch64";
 
     // ── C sources ───────────────────────────────────────────────────────────
     let mut c_build = cc::Build::new();
@@ -38,6 +40,10 @@ fn main() {
         c_build
             .file(whisper_dir.join("ggml/src/ggml-cpu/arch/x86/quants.c"))
             .include(whisper_dir.join("ggml/src/ggml-cpu/arch/x86"));
+    } else if is_aarch64 {
+        c_build
+            .file(whisper_dir.join("ggml/src/ggml-cpu/arch/arm/quants.c"))
+            .include(whisper_dir.join("ggml/src/ggml-cpu/arch/arm"));
     }
     if is_msvc {
         c_build.flag("/O2");
@@ -86,6 +92,11 @@ fn main() {
             .file(whisper_dir.join("ggml/src/ggml-cpu/arch/x86/cpu-feats.cpp"))
             .file(whisper_dir.join("ggml/src/ggml-cpu/arch/x86/repack.cpp"))
             .include(whisper_dir.join("ggml/src/ggml-cpu/arch/x86"));
+    } else if is_aarch64 {
+        cpp_build
+            .file(whisper_dir.join("ggml/src/ggml-cpu/arch/arm/cpu-feats.cpp"))
+            .file(whisper_dir.join("ggml/src/ggml-cpu/arch/arm/repack.cpp"))
+            .include(whisper_dir.join("ggml/src/ggml-cpu/arch/arm"));
     }
     if is_msvc {
         cpp_build.flag("/std:c++17").flag("/EHsc").flag("/O2");
@@ -150,7 +161,7 @@ fn main() {
     whisper_build.compile("whisper");
 
     // ── bindgen ───────────────────────────────────────────────────────────
-    let bindings = bindgen::Builder::default()
+    let mut bindgen_builder = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_arg(format!("-I{}", whisper_dir.join("include").display()))
         .clang_arg(format!("-I{}", whisper_dir.join("ggml/include").display()))
@@ -158,7 +169,44 @@ fn main() {
         .allowlist_type("whisper_.*")
         .allowlist_var("WHISPER_.*")
         .blocklist_type("__.*")
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
+
+    if is_android {
+        // Without an explicit --target/--sysroot, libclang falls back to the
+        // host's own headers (glibc on the Linux runner) instead of the NDK's
+        // bionic ones, and fails with e.g. "bits/libc-header-start.h not
+        // found". Point it at the NDK sysroot for the actual target triple.
+        let ndk_home = env::var("ANDROID_NDK_HOME")
+            .or_else(|_| env::var("ANDROID_NDK_ROOT"))
+            .or_else(|_| env::var("NDK_HOME"))
+            .expect("ANDROID_NDK_HOME (or ANDROID_NDK_ROOT/NDK_HOME) must be set when building for Android");
+        let host_tag = if cfg!(target_os = "macos") {
+            "darwin-x86_64"
+        } else if cfg!(target_os = "windows") {
+            "windows-x86_64"
+        } else {
+            "linux-x86_64"
+        };
+        let sysroot = PathBuf::from(&ndk_home)
+            .join("toolchains/llvm/prebuilt")
+            .join(host_tag)
+            .join("sysroot");
+        // API level must be <= the NDK's own minSdkVersion floor; 24 matches
+        // Tauri's default Android minSdkVersion.
+        const ANDROID_API_LEVEL: u32 = 24;
+        let clang_target = match target_arch.as_str() {
+            "aarch64" => format!("aarch64-linux-android{ANDROID_API_LEVEL}"),
+            "arm" => format!("armv7a-linux-androideabi{ANDROID_API_LEVEL}"),
+            "x86_64" => format!("x86_64-linux-android{ANDROID_API_LEVEL}"),
+            "x86" => format!("i686-linux-android{ANDROID_API_LEVEL}"),
+            other => panic!("unsupported Android target_arch for bindgen: {other}"),
+        };
+        bindgen_builder = bindgen_builder
+            .clang_arg(format!("--target={clang_target}"))
+            .clang_arg(format!("--sysroot={}", sysroot.display()));
+    }
+
+    let bindings = bindgen_builder
         .generate()
         .expect("Failed to generate FFI bindings");
     bindings
